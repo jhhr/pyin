@@ -22,11 +22,18 @@ SOURCES := PYinVamp.cpp \
 
 PLUGIN_MAIN := libmain.cpp
 
-TESTS := test/test-meanfilter \
-         test/test-fft \
-         test/test-yin \
-         test/test-mononote
-	 
+TESTS := test/test-pyin
+
+TEST_SOURCES := test/TestMain.cpp \
+                test/TestMeanFilter.cpp \
+                test/TestFFT.cpp \
+                test/TestYin.cpp \
+                test/TestYinUtil.cpp \
+                test/TestMonoNote.cpp \
+                test/TestRegression.cpp
+
+TEST_OBJECTS := $(TEST_SOURCES:.cpp=.o)
+
 OBJECTS := $(SOURCES:.cpp=.o)
 OBJECTS := $(OBJECTS:.c=.o)
 
@@ -41,16 +48,7 @@ plugin: $(PLUGIN)
 $(PLUGIN): $(PLUGIN_OBJECTS)
 	$(CXX) -o $@ $^ $(PLUGIN_LDFLAGS)
 
-test/test-meanfilter: test/TestMeanFilter.o $(OBJECTS)
-	$(CXX) -o $@ $^ $(TEST_LDFLAGS)
-
-test/test-fft: test/TestFFT.o $(OBJECTS)
-	$(CXX) -o $@ $^ $(TEST_LDFLAGS)
-	
-test/test-yin: test/TestYin.o $(OBJECTS)
-	$(CXX) -o $@ $^ $(TEST_LDFLAGS)
-	
-test/test-mononote: test/TestMonoNote.o $(OBJECTS)
+test/test-pyin: $(TEST_OBJECTS) $(OBJECTS)
 	$(CXX) -o $@ $^ $(TEST_LDFLAGS)
 
 clean:		

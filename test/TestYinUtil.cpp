@@ -2,21 +2,27 @@
 
 #include "YinUtil.h"
 
-#define BOOST_TEST_DYN_LINK
-#define BOOST_TEST_MAIN
-
 #include <boost/test/unit_test.hpp>
 
-BOOST_AUTO_TEST_SUITE(TestYin)
+BOOST_AUTO_TEST_SUITE(TestYinUtil)
 
 BOOST_AUTO_TEST_CASE(difference1)
 {
     // difference always needs to be non-negative
     double in[] = { 1, -1, 1, -1, 1, -1, 1, -1 };
     double yinBuffer[4];
-    
-    YinUtil::difference(in, yinBuffer, 4);
-    
+
+    YinUtil yinUtil(4);
+
+    yinUtil.slowDifference(in, yinBuffer);
+
+    BOOST_CHECK(yinBuffer[0] >= 0);
+    BOOST_CHECK(yinBuffer[1] >= 0);
+    BOOST_CHECK(yinBuffer[2] >= 0);
+    BOOST_CHECK(yinBuffer[3] >= 0);
+
+    yinUtil.fastDifference(in, yinBuffer);
+
     BOOST_CHECK(yinBuffer[0] >= 0);
     BOOST_CHECK(yinBuffer[1] >= 0);
     BOOST_CHECK(yinBuffer[2] >= 0);
