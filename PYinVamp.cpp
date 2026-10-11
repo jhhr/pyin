@@ -52,7 +52,13 @@ PYinVamp::PYinVamp(float inputSampleRate) :
     m_pitchProb(0),
     m_timestamp(0),
     m_level(0),
-    m_pitchTrack(0)
+    m_pitchTrack(0),
+    m_salienceCandidates(0.0f),
+    m_candidateRule(0.0f),
+    m_commonF0(0.0f),
+    m_levelFloor(0.0f),
+    m_voicedFloor(0.0f),
+    m_voiceHold(0.0f)
 {
 }
 
@@ -227,6 +233,81 @@ PYinVamp::getParameterDescriptors() const
     d.isQuantized = false;
     list.push_back(d);
 
+    // For voices with harmonies, doubles and echoes, as in vocals
+    // separated from a mix. Each default is pYIN 1.2's behaviour.
+
+    d.identifier = "candidaterule";
+    d.valueNames.clear();
+    d.name = "Candidate probabilities";
+    d.description = "How the Yin candidates share the probability that a frame is voiced: by every dip of the difference function, or by the dips in order of period, mostly to the first, as Yin chooses, which avoids most octave-down errors.";
+    d.unit = "";
+    d.minValue = 0.0f;
+    d.maxValue = 1.0f;
+    d.defaultValue = 0.0f;
+    d.isQuantized = true;
+    d.quantizeStep = 1.0f;
+    d.valueNames.push_back("Every dip");
+    d.valueNames.push_back("Dips in order");
+    list.push_back(d);
+
+    d.identifier = "salmode";
+    d.valueNames.clear();
+    d.name = "Pitch candidates";
+    d.description = "Where the pitch track's candidates come from: the Yin difference function, or a harmonic salience of the spectrum, which finds each of two voices singing together where Yin finds the period they have in common, an octave or two below both.";
+    d.unit = "";
+    d.minValue = 0.0f;
+    d.maxValue = 1.0f;
+    d.defaultValue = 0.0f;
+    d.isQuantized = true;
+    d.quantizeStep = 1.0f;
+    d.valueNames.push_back("Yin");
+    d.valueNames.push_back("Harmonic salience");
+    list.push_back(d);
+
+    d.identifier = "commonf0";
+    d.valueNames.clear();
+    d.name = "Common fundamental penalty";
+    d.description = "With harmonic salience candidates: the share of its salience a candidate loses where two voices, a fifth or a fourth apart, make it look like their common fundamental and it has no partial of its own (0: none).";
+    d.unit = "";
+    d.minValue = 0.0f;
+    d.maxValue = 1.0f;
+    d.defaultValue = 0.0f;
+    d.isQuantized = false;
+    list.push_back(d);
+
+    d.identifier = "levelfloor";
+    d.valueNames.clear();
+    d.name = "Level floor";
+    d.description = "Frames more than this many dB below the level of the last ten seconds' singing are not voiced, which removes most echo and reverb tails (0: none).";
+    d.unit = "dB";
+    d.minValue = 0.0f;
+    d.maxValue = 60.0f;
+    d.defaultValue = 0.0f;
+    d.isQuantized = false;
+    list.push_back(d);
+
+    d.identifier = "voicedfloor";
+    d.valueNames.clear();
+    d.name = "Voiced gap bridging";
+    d.description = "Lets the pitch track cross frames that have no candidate near it rather than break: the least likelihood of a voiced pitch, relative to that of no pitch (0: none).";
+    d.unit = "";
+    d.minValue = 0.0f;
+    d.maxValue = 1.0f;
+    d.defaultValue = 0.0f;
+    d.isQuantized = false;
+    list.push_back(d);
+
+    d.identifier = "voicehold";
+    d.valueNames.clear();
+    d.name = "Voice hold across gaps";
+    d.description = "Makes the pitch track come back after an unvoiced gap near the pitch it left, rather than on another voice: how much more a move costs during the gap than staying (0: no more).";
+    d.unit = "";
+    d.minValue = 0.0f;
+    d.maxValue = 10.0f;
+    d.defaultValue = 0.0f;
+    d.isQuantized = false;
+    list.push_back(d);
+
     return list;
 }
 
@@ -253,6 +334,24 @@ PYinVamp::getParameter(string identifier) const
     }
     if (identifier == "prunethresh") {
             return m_pruneThresh;
+    }
+    if (identifier == "candidaterule") {
+            return m_candidateRule;
+    }
+    if (identifier == "salmode") {
+            return m_salienceCandidates;
+    }
+    if (identifier == "commonf0") {
+            return m_commonF0;
+    }
+    if (identifier == "levelfloor") {
+            return m_levelFloor;
+    }
+    if (identifier == "voicedfloor") {
+            return m_voicedFloor;
+    }
+    if (identifier == "voicehold") {
+            return m_voiceHold;
     }
     return 0.f;
 }
@@ -287,6 +386,30 @@ PYinVamp::setParameter(string identifier, float value)
     if (identifier == "prunethresh")
     {
         m_pruneThresh = value;
+    }
+    if (identifier == "candidaterule")
+    {
+        m_candidateRule = value;
+    }
+    if (identifier == "salmode")
+    {
+        m_salienceCandidates = value;
+    }
+    if (identifier == "commonf0")
+    {
+        m_commonF0 = value;
+    }
+    if (identifier == "levelfloor")
+    {
+        m_levelFloor = value;
+    }
+    if (identifier == "voicedfloor")
+    {
+        m_voicedFloor = value;
+    }
+    if (identifier == "voicehold")
+    {
+        m_voiceHold = value;
     }
 }
 
@@ -430,9 +553,27 @@ PYinVamp::reset()
     m_yin.setThresholdDistr(m_threshDistr);
     m_yin.setFrameSize(m_blockSize);
     m_yin.setFast(!m_preciseTime);
+    m_yin.setCandidateRule(m_candidateRule > 0.5f ? 1 : 0);
 
-    if (m_fixedLag > 0.5f) m_pitchHmm = MonoPitchHMM(100);
-    else                   m_pitchHmm = MonoPitchHMM(0);
+    int lag = m_fixedLag > 0.5f ? 100 : 0;
+    m_pitchHmm = MonoPitchHMM(lag, m_voicedFloor, m_voiceHold);
+
+    if (m_salienceCandidates > 0.5f) {
+        // centred where the frame's timestamp is
+        int offset = m_preciseTime == 1.0 ? m_blockSize/2 : m_blockSize/4;
+        m_salience.reset(new HarmonicSalience
+                         (m_inputSampleRate, int(m_blockSize), int(m_stepSize),
+                          offset, HarmonicSalience::Params()));
+    } else {
+        m_salience.reset();
+    }
+    if (m_levelFloor > 0) {
+        m_levelGate.reset(new LevelGate
+                          (m_levelFloor, int(10.0f * m_inputSampleRate / m_stepSize)));
+    } else {
+        m_levelGate.reset();
+    }
+    m_waiting.clear();
     
     m_pitchProb.clear();
     m_timestamp.clear();
@@ -459,12 +600,38 @@ PYinVamp::process(const float *const *inputBuffers, RealTime timestamp)
     rms /= m_blockSize;
     rms = sqrt(rms);
     
-    bool isLowAmplitude = (rms < m_lowAmp);
-    
     Yin::YinOutput yo = m_yin.processProbabilisticYin(dInputBuffers);
     delete [] dInputBuffers;
 
     m_level.push_back(yo.rms);
+
+    if (!m_salience) {
+        addFrame(yo, rms, timestamp, fs);
+        return fs;
+    }
+
+    // A frame's salience window can reach past its block, so the
+    // frame waits until the blocks that complete it have come
+    m_salience->push(inputBuffers[0]);
+    WaitingFrame waiting;
+    waiting.yo = yo;
+    waiting.rms = rms;
+    waiting.timestamp = timestamp;
+    m_waiting.push_back(waiting);
+    while (!m_waiting.empty() && m_salience->ready()) {
+        WaitingFrame &w = m_waiting.front();
+        w.yo.freqProb = salienceCandidates(w.yo.freqProb, w.rms);
+        addFrame(w.yo, w.rms, w.timestamp, fs);
+        m_waiting.pop_front();
+    }
+    return fs;
+}
+
+void
+PYinVamp::addFrame(const Yin::YinOutput &yo, float rms, RealTime timestamp,
+                   FeatureSet &fs)
+{
+    bool isLowAmplitude = (rms < m_lowAmp);
 
     vector<pair<double, double> > tempPitchProb;
     for (size_t iCandidate = 0; iCandidate < yo.freqProb.size(); ++iCandidate)
@@ -479,6 +646,17 @@ PYinVamp::process(const float *const *inputBuffers, RealTime timestamp)
             tempPitchProb.push_back(pair<double, double>
                 (tempPitch, yo.freqProb[iCandidate].second*factor));
         }
+    }
+
+    if (m_levelGate) {
+        double gate = m_levelGate->process(rms);
+        if (gate < 1) {
+            for (size_t i = 0; i < tempPitchProb.size(); ++i) {
+                tempPitchProb[i].second *= gate;
+            }
+        }
+        // the floor bridges gaps in loud singing, not into a tail
+        m_pitchHmm.m_voicedFloor = m_voicedFloor * gate;
     }
 
     vector<double> tempObsProb = m_pitchHmm.calculateObsProb(tempPitchProb);
@@ -559,14 +737,21 @@ PYinVamp::process(const float *const *inputBuffers, RealTime timestamp)
         salienceSum += yo.salience[iBin];
     }
     fs[m_oCandidateSalience].push_back(f);
-
-    return fs;
 }
 
 PYinVamp::FeatureSet
 PYinVamp::getRemainingFeatures()
 {
     FeatureSet fs;
+
+    // The frames still waiting for their salience, as if the audio
+    // went on in silence
+    while (!m_waiting.empty()) {
+        WaitingFrame &w = m_waiting.front();
+        w.yo.freqProb = salienceCandidates(w.yo.freqProb, w.rms);
+        addFrame(w.yo, w.rms, w.timestamp, fs);
+        m_waiting.pop_front();
+    }
 
     if (m_pitchProb.empty()) {
         return fs;
@@ -705,4 +890,52 @@ PYinVamp::addNoteFeatures(FeatureSet &fs)
         }
         oldIsVoiced = isVoiced;
     }
+}
+
+vector<pair<double, double> >
+PYinVamp::salienceCandidates(const vector<pair<double, double> > &yinFreqProb,
+                             float rms)
+{
+    vector<HarmonicSalience::Candidate> candidates = m_salience->next();
+    if (m_commonF0 > 0) {
+        m_salience->penaliseCommonFundamentals(candidates, m_commonF0);
+    }
+
+    // A ramp in the frame's level from `from` to `to` times the
+    // low-amplitude threshold (1 if there is none)
+    auto levelRamp = [&](float from, float to) {
+        if (m_lowAmp <= 0) return 1.0;
+        double g = (rms - from * m_lowAmp) / ((to - from) * m_lowAmp);
+        return std::max(0.0, std::min(1.0, g));
+    };
+
+    // YIN's candidates' probabilities sum to its probability that the
+    // frame is voiced. The part on periods longer than the HMM's lowest
+    // pitch never reaches the HMM, here as in pYIN 1.2: it leaves a
+    // frame of hum, or of a quiet chord's common period, unvoiced.
+    double voiced = 0;
+    for (size_t i = 0; i < yinFreqProb.size(); ++i) {
+        if (yinFreqProb[i].first > m_pitchHmm.m_minFreq) {
+            voiced += yinFreqProb[i].second;
+        }
+    }
+
+    // YIN's aperiodicity stays high where two or three voices sound at
+    // once, though each of them is harmonic: the salience's
+    // harmonicity gives such a frame a floor of voiced probability, a
+    // half at most, if it is loud enough
+    const float harmonicityLow = 0.05f, harmonicityHigh = 0.12f;
+    double r = (m_salience->harmonicity() - harmonicityLow) /
+        (harmonicityHigh - harmonicityLow);
+    r = std::max(0.0, std::min(1.0, r));
+    voiced = std::max(voiced, 0.5 * r * levelRamp(0.2f, 0.4f));
+
+    // A very quiet frame (hum, breath, a separation's residue) is not
+    // voiced at all
+    voiced *= levelRamp(0.05f, 0.15f);
+
+    // No harmonic peak, or no voiced probability left, makes an
+    // unvoiced frame: YIN's candidates would bring back the long
+    // periods the salience is there to avoid
+    return m_salience->candidateProbabilities(candidates, voiced);
 }

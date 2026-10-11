@@ -32,6 +32,7 @@ Yin::Yin(size_t frameSize, size_t inputSampleRate, double thresh, bool fast) :
     m_threshDistr(2),
     m_yinBufferSize(frameSize/2),
     m_fast(fast),
+    m_candidateRule(0),
     m_yinUtil(new YinUtil(m_yinBufferSize))
 {
     if (frameSize & (frameSize-1)) {
@@ -96,8 +97,12 @@ Yin::processProbabilisticYin(const double *in) const {
 
     m_yinUtil->cumulativeDifference(yinBuffer);
 
-    vector<double> peakProbability = m_yinUtil->yinProb(yinBuffer, m_threshDistr);
-    
+    // The ordered rule's settings: the k-th dip below a threshold
+    // weighted e^-k, dips within 8% of a period one valley
+    vector<double> peakProbability = m_candidateRule == 1 ?
+        m_yinUtil->yinProbOrdered(yinBuffer, m_orderedPrior, 1.0, 0.08) :
+        m_yinUtil->yinProb(yinBuffer, m_threshDistr);
+
     // calculate overall "probability" from peak probability
     double probSum = 0;
     for (size_t iBin = 0; iBin < m_yinBufferSize; ++iBin)
@@ -151,5 +156,19 @@ int
 Yin::setFast(bool parameter)
 {
     m_fast = parameter;
+    return 0;
+}
+
+int
+Yin::setCandidateRule(int rule)
+{
+    m_candidateRule = rule;
+    // The ordered rule's thresholds have a mean of 1/3, higher than
+    // pYIN's distributions: a voice's own dip need not be deep to
+    // count, and the order keeps the deeper dips at longer periods
+    // from winning
+    if (rule == 1 && m_orderedPrior.empty()) {
+        m_orderedPrior = YinUtil::betaThresholdPrior(2.0, 4.0);
+    }
     return 0;
 }

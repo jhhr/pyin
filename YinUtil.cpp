@@ -320,8 +320,105 @@ YinUtil::yinProb(const double *yinBuffer, int prior, int minTau0, int maxTau0)
     return peakProb;
 }
 
+std::vector<double>
+YinUtil::betaThresholdPrior(double a, double b)
+{
+    std::vector<double> d(100);
+    double sum = 0;
+    for (int i = 0; i < 100; ++i) {
+        double x = std::min(0.01 + i * 0.01, 0.9999);
+        d[i] = std::exp((a - 1) * std::log(x) + (b - 1) * std::log(1 - x));
+        sum += d[i];
+    }
+    for (int i = 0; i < 100; ++i) d[i] /= sum;
+    return d;
+}
+
+std::vector<double>
+YinUtil::yinProbOrdered(const double *yinBuffer, const std::vector<double> &prior,
+                        double lambda, double mergeRadius)
+{
+    int minTau = 2;
+    int maxTau = m_yinBufferSize;
+    double noDipProb = 0.01;
+
+    std::vector<double> peakProb(m_yinBufferSize, 0.0);
+
+    // The dips: local minima of the difference function below 1, found
+    // as yinProb() finds them
+    std::vector<int> dipTau;
+    std::vector<double> dipVal;
+    int tau = minTau;
+    while (tau + 1 < maxTau) {
+        if (yinBuffer[tau] < 1.0 && yinBuffer[tau+1] < yinBuffer[tau]) {
+            while (tau + 1 < maxTau && yinBuffer[tau+1] < yinBuffer[tau]) {
+                tau++;
+            }
+            dipTau.push_back(tau);
+            dipVal.push_back(yinBuffer[tau]);
+        }
+        tau++;
+    }
+
+    if (mergeRadius > 0 && dipTau.size() > 1) {
+        std::vector<int> mergedTau;
+        std::vector<double> mergedVal;
+        int first = 0;
+        for (int k = 1; k <= int(dipTau.size()); ++k) {
+            bool sameValley = k < int(dipTau.size()) &&
+                dipTau[k] - dipTau[first] <= std::max(2.0, mergeRadius * dipTau[first]);
+            if (!sameValley) {
+                int bottom = first;
+                for (int j = first; j < k; ++j) {
+                    if (dipVal[j] < dipVal[bottom]) bottom = j;
+                }
+                mergedTau.push_back(dipTau[bottom]);
+                mergedVal.push_back(dipVal[bottom]);
+                first = k;
+            }
+        }
+        dipTau = mergedTau;
+        dipVal = mergedVal;
+    }
+
+    int nDip = int(dipTau.size());
+    if (nDip == 0) return peakProb;
+
+    int deepest = -1;
+    for (int k = 0; k < nDip; ++k) {
+        if (dipTau[k] > 2 && (deepest < 0 || dipVal[k] < dipVal[deepest])) {
+            deepest = k;
+        }
+    }
+
+    int nThresholds = int(prior.size());
+    std::vector<double> weight(nDip);
+    for (int i = 0; i < nThresholds; ++i) {
+        double threshold = 0.01 + i * 0.01;
+        double norm = 0;
+        int rank = 0;
+        for (int k = 0; k < nDip; ++k) {
+            if (dipVal[k] < threshold) {
+                weight[k] = std::exp(-lambda * rank);
+                norm += weight[k];
+                ++rank;
+            } else {
+                weight[k] = 0;
+            }
+        }
+        if (rank == 0) {
+            if (deepest >= 0) peakProb[dipTau[deepest]] += noDipProb * prior[i];
+            continue;
+        }
+        for (int k = 0; k < nDip; ++k) {
+            if (weight[k] > 0) peakProb[dipTau[k]] += prior[i] * weight[k] / norm;
+        }
+    }
+    return peakProb;
+}
+
 double
-YinUtil::parabolicInterpolation(const double *yinBuffer, int tau) 
+YinUtil::parabolicInterpolation(const double *yinBuffer, int tau)
 {
     // this is taken almost literally from Joren Six's Java implementation
     if (tau == m_yinBufferSize) // not valid anyway.

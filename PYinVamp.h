@@ -18,6 +18,10 @@
 
 #include "Yin.h"
 #include "MonoPitchHMM.h"
+#include "HarmonicSalience.h"
+#include "LevelGate.h"
+
+#include <memory>
 
 class PYinVamp : public Vamp::Plugin
 {
@@ -85,6 +89,53 @@ protected:
     deque<Vamp::RealTime> m_timestamp;
     vector<float> m_level;
     vector<float> m_pitchTrack;
+
+    // The analysis of voices with harmonies, doubles and echoes. Each
+    // parameter's default, 0, is pYIN 1.2 exactly.
+
+    // Candidates from a harmonic salience of the spectrum (see
+    // HarmonicSalience.h) in place of YIN's. YIN still runs: its
+    // probability that the frame is voiced is what they share
+    float m_salienceCandidates;
+
+    // How YIN's dips get their probabilities: 0, every dip (pYIN 1.2);
+    // 1, the dips in order of period (see YinUtil::yinProbOrdered())
+    float m_candidateRule;
+
+    // With salience candidates, how much of its salience a candidate
+    // loses that looks like the common fundamental of two voices (see
+    // HarmonicSalience::penaliseCommonFundamentals())
+    float m_commonF0;
+
+    // Frames more than this many dB below the level of the last ten
+    // seconds are faded out of voicing (see LevelGate.h)
+    float m_levelFloor;
+
+    // MonoPitchHMM's voiced floor (scaled by the level gate, so that it
+    // bridges gaps in loud singing and not into a quiet tail) and its
+    // unvoiced hold
+    float m_voicedFloor;
+    float m_voiceHold;
+
+    std::unique_ptr<HarmonicSalience> m_salience;
+    std::unique_ptr<LevelGate> m_levelGate;
+
+    // Frames whose salience window reaches past the blocks given so far
+    struct WaitingFrame {
+        Yin::YinOutput yo;
+        float rms;
+        Vamp::RealTime timestamp;
+    };
+    deque<WaitingFrame> m_waiting;
+
+    // Feeds a frame's candidates to the pitch HMM and adds its outputs
+    void addFrame(const Yin::YinOutput &yo, float rms,
+                  Vamp::RealTime timestamp, FeatureSet &fs);
+
+    // The salience candidates of the next frame, with their share of
+    // the probability that it is voiced
+    vector<pair<double, double> > salienceCandidates
+        (const vector<pair<double, double> > &yinFreqProb, float rms);
 
     void addNoteFeatures(FeatureSet &fs);
 };

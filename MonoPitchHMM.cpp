@@ -15,6 +15,7 @@
 
 #include <boost/math/distributions.hpp>
 
+#include <algorithm>
 #include <cstdio>
 #include <cmath>
 #include <iostream>
@@ -22,7 +23,7 @@
 using std::vector;
 using std::pair;
 
-MonoPitchHMM::MonoPitchHMM(int fixedLag) :
+MonoPitchHMM::MonoPitchHMM(int fixedLag, double voicedFloor, double unvoicedHold) :
     SparseHMM(fixedLag),
     m_minFreq(61.735),
     m_nBPS(5),
@@ -30,7 +31,10 @@ MonoPitchHMM::MonoPitchHMM(int fixedLag) :
     m_transitionWidth(0),
     m_selfTrans(0.99),
     m_yinTrust(.5),
-    m_freqs(0)
+    m_freqs(0),
+    m_voicedFloor(voicedFloor),
+    m_keepStateFreq(voicedFloor > 0),
+    m_unvoicedHold(unvoicedHold)
 {
     m_transitionWidth = 5*(m_nBPS/2) + 1;
     m_nPitch = 69 * m_nBPS;
@@ -80,6 +84,19 @@ MonoPitchHMM::calculateObsProb(const vector<pair<double, double> > &pitchProb)
         if (probYinPitched > 0) out[iPitch] *= (probReallyPitched/probYinPitched) ;
         out[iPitch+m_nPitch] = (1 - probReallyPitched) / m_nPitch;
     }
+    if (m_voicedFloor > 0)
+    {
+        // Without a floor, a voiced path ends wherever one frame lacks
+        // a candidate within a semitone of it, though the voice goes
+        // on (a consonant, a breath of noise, another voice louder for
+        // a moment); with one, crossing a gap of n frames costs about
+        // m_voicedFloor^n, against the two voicing switches of going
+        // unvoiced
+        for (int iPitch = 0; iPitch < m_nPitch; ++iPitch)
+        {
+            out[iPitch] = std::max(out[iPitch], m_voicedFloor * out[iPitch+m_nPitch]);
+        }
+    }
     // out[2*m_nPitch] = m_yinTrust * (1 - probYinPitched);
     return(out);
 }
@@ -125,9 +142,17 @@ MonoPitchHMM::build()
             m_to.push_back(i+m_nPitch);
             m_transProb.push_back(weights[i-minNextPitch] / weightSum * (1-m_selfTrans));
 
+            // An unvoiced state's pitch is the one the voice left: with
+            // a hold, moving it costs more, so that the path comes back
+            // after a short gap to the voice it left rather than to
+            // another one. Staying costs what it costs a voiced state,
+            // so that neither voicing is favoured; the row then sums to
+            // less than one, which Viterbi decoding allows.
+            double unvoicedWeight = weights[i-minNextPitch];
+            if (i != iPitch) unvoicedWeight /= 1 + m_unvoicedHold;
             m_from.push_back(iPitch+m_nPitch);
             m_to.push_back(i+m_nPitch);
-            m_transProb.push_back(weights[i-minNextPitch] / weightSum * m_selfTrans);
+            m_transProb.push_back(unvoicedWeight / weightSum * m_selfTrans);
             // transProb.push_back(weights[i-minNextPitch] / weightSum * 0.5);
             
             m_from.push_back(iPitch+m_nPitch);
@@ -190,6 +215,13 @@ MonoPitchHMM::nearestFreq(int state, const vector<pair<double, double> > &pitchP
                 leastDist = dist;
                 bestFreq = freq;
             }
+        }
+        // A state the path reached over the voiced floor may have no
+        // candidate near it: it keeps its own frequency
+        if (m_keepStateFreq &&
+            (bestFreq <= 0 || std::abs(1200 * std::log2(bestFreq / hmmFreq)) > 100))
+        {
+            bestFreq = hmmFreq;
         }
     } else {
         bestFreq = hmmFreq;

@@ -10,6 +10,7 @@ CXXFLAGS := -I. $(CXXFLAGS)
 PLUGIN := pyin$(PLUGIN_EXT)
 
 SOURCES := PYinVamp.cpp \
+           HarmonicSalience.cpp \
            YinVamp.cpp \
            LocalCandidatePYIN.cpp \
            Yin.cpp \
@@ -30,6 +31,10 @@ TEST_SOURCES := test/TestMain.cpp \
                 test/TestYin.cpp \
                 test/TestYinUtil.cpp \
                 test/TestMonoNote.cpp \
+                test/TestMonoPitchHMM.cpp \
+                test/TestHarmonicSalience.cpp \
+                test/TestLevelGate.cpp \
+                test/TestPYinVamp.cpp \
                 test/TestRegression.cpp
 
 TEST_OBJECTS := $(TEST_SOURCES:.cpp=.o)
@@ -63,6 +68,8 @@ depend:
 # DO NOT DELETE
 
 libmain.o: PYinVamp.h Yin.h MeanFilter.h YinVamp.h LocalCandidatePYIN.h
+libmain.o: HarmonicSalience.h LevelGate.h
+HarmonicSalience.o: HarmonicSalience.h
 LocalCandidatePYIN.o: LocalCandidatePYIN.h Yin.h MeanFilter.h
 LocalCandidatePYIN.o: MonoPitchHMM.h SparseHMM.h YinUtil.h
 MonoNote.o: MonoNote.h MonoNoteHMM.h MonoNoteParameters.h SparseHMM.h
@@ -71,6 +78,7 @@ MonoNoteParameters.o: MonoNoteParameters.h
 MonoPitchHMM.o: MonoPitchHMM.h SparseHMM.h
 PYinVamp.o: PYinVamp.h Yin.h MeanFilter.h MonoNote.h MonoNoteHMM.h
 PYinVamp.o: MonoNoteParameters.h SparseHMM.h MonoPitchHMM.h
+PYinVamp.o: HarmonicSalience.h LevelGate.h
 SparseHMM.o: SparseHMM.h
 Yin.o: Yin.h MeanFilter.h YinUtil.h
 YinUtil.o: YinUtil.h MeanFilter.h
@@ -84,6 +92,13 @@ test/TestMonoNote.o: MonoNote.h MonoNoteHMM.h MonoNoteParameters.h
 test/TestMonoNote.o: SparseHMM.h
 test/TestYin.o: Yin.h MeanFilter.h
 test/TestYinUtil.o: YinUtil.h MeanFilter.h
+test/TestMonoPitchHMM.o: MonoPitchHMM.h SparseHMM.h
+test/TestHarmonicSalience.o: HarmonicSalience.h
+test/TestLevelGate.o: LevelGate.h
+test/TestPYinVamp.o: PYinVamp.h Yin.h MeanFilter.h MonoPitchHMM.h SparseHMM.h
+test/TestPYinVamp.o: HarmonicSalience.h LevelGate.h
+test/TestRegression.o: PYinVamp.h Yin.h MeanFilter.h MonoPitchHMM.h SparseHMM.h
+test/TestRegression.o: HarmonicSalience.h LevelGate.h
 LocalCandidatePYIN.o: Yin.h MeanFilter.h
 MonoNote.o: MonoNoteHMM.h MonoNoteParameters.h SparseHMM.h
 MonoNoteHMM.o: MonoNoteParameters.h SparseHMM.h

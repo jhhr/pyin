@@ -54,6 +54,15 @@ public:
     int setThresholdDistr(float parameter);
     int setFrameSize(size_t frameSize);
     int setFast(bool fast);
+
+    /**
+     * How processProbabilisticYin() gives its candidates their
+     * probabilities: rule 0 is pYIN 1.2's (YinUtil::yinProb(), every
+     * dip, with the threshold distribution of setThresholdDistr()),
+     * rule 1 the dips in order of period (YinUtil::yinProbOrdered(),
+     * with a threshold distribution of its own).
+     */
+    int setCandidateRule(int rule);
     // int setRemoveUnvoiced(bool frameSize);
     YinOutput process(const double *in) const;
     YinOutput processProbabilisticYin(const double *in) const;
@@ -65,6 +74,8 @@ private:
     mutable size_t m_threshDistr;
     mutable size_t m_yinBufferSize;
     mutable bool   m_fast;
+    int m_candidateRule;
+    vector<double> m_orderedPrior;
     // mutable bool m_removeUnvoiced;
     YinUtil *m_yinUtil;
 };

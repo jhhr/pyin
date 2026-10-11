@@ -26,7 +26,7 @@ using std::vector;
 class MonoPitchHMM : public SparseHMM
 {
 public:
-    MonoPitchHMM(int fixedLag);
+    MonoPitchHMM(int fixedLag, double voicedFloor = 0, double unvoicedHold = 0);
     std::vector<double> calculateObsProb(const vector<pair<double, double> > &);
     float nearestFreq(int state, const vector<pair<double, double> > &pitchProb);
     void build();
@@ -37,6 +37,21 @@ public:
     double m_selfTrans;
     double m_yinTrust;
     vector<double> m_freqs;
+
+    // Every voiced state's observation is at least this times the
+    // unvoiced states' (0: none, as in pYIN 1.2), so that the voiced
+    // path can cross frames with no candidate near it. A caller may
+    // change it from frame to frame.
+    double m_voicedFloor;
+
+    // With a voiced floor, a voiced state on the path may have no
+    // candidate near it: nearestFreq() then gives the state's own
+    // frequency rather than a candidate's far from it
+    bool m_keepStateFreq;
+
+    // An unvoiced state's transitions to another pitch are divided by
+    // 1 + m_unvoicedHold (0: none, as in pYIN 1.2)
+    double m_unvoicedHold;
 };
 
 #endif
