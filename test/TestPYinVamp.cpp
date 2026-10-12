@@ -161,7 +161,7 @@ static double meanProbabilityNear(const vector<float> &audio, const Params &para
 
 struct Count {
     int voiced = 0;   // voiced frames in the span
-    int near = 0;     // ... within 50 cents of one of the voices
+    int onVoice = 0;  // ... within 50 cents of one of the voices
 };
 
 static Count count(const vector<pair<double, double> > &track, double from, double to,
@@ -173,7 +173,7 @@ static Count count(const vector<pair<double, double> > &track, double from, doub
         ++c.voiced;
         for (double v : voices) {
             if (std::fabs(1200 * std::log2(p.second / v)) < 50) {
-                ++c.near;
+                ++c.onVoice;
                 break;
             }
         }
@@ -248,7 +248,7 @@ BOOST_AUTO_TEST_CASE(fifthTracksAVoiceNotTheCommonFundamental)
     vector<float> audio = mix(tone(330, 0.25, 1.5), tone(495, 0.25, 1.5));
     Count c = count(pitchTrack(audio, robust()), 0.25, 1.25, { 330, 495 });
     BOOST_CHECK_GE(c.voiced, framesInSpan * 9 / 10);
-    BOOST_CHECK_EQUAL(c.near, c.voiced);
+    BOOST_CHECK_EQUAL(c.onVoice, c.voiced);
 }
 
 BOOST_AUTO_TEST_CASE(commonFundamentalLosesItsProbability)
@@ -273,7 +273,7 @@ BOOST_AUTO_TEST_CASE(thirdTracksAVoiceNotTheCommonPeriod)
     vector<float> audio = mix(tone(330, 0.25, 1.5), tone(412.5, 0.25, 1.5));
     Count c = count(pitchTrack(audio, robust()), 0.25, 1.25, { 330, 412.5 });
     BOOST_CHECK_GE(c.voiced, framesInSpan * 9 / 10);
-    BOOST_CHECK_EQUAL(c.near, c.voiced);
+    BOOST_CHECK_EQUAL(c.onVoice, c.voiced);
 }
 
 BOOST_AUTO_TEST_CASE(periodDoubledToneKeepsItsPitch)
@@ -283,7 +283,7 @@ BOOST_AUTO_TEST_CASE(periodDoubledToneKeepsItsPitch)
     vector<float> audio = tone(147, 0.3, 1.5, 0.1);
     Count c = count(pitchTrack(audio, robust()), 0.25, 1.25, { 147 });
     BOOST_CHECK_GE(c.voiced, framesInSpan * 9 / 10);
-    BOOST_CHECK_EQUAL(c.near, c.voiced);
+    BOOST_CHECK_EQUAL(c.onVoice, c.voiced);
 }
 
 BOOST_AUTO_TEST_CASE(echoTailIsNotVoiced)
@@ -296,7 +296,7 @@ BOOST_AUTO_TEST_CASE(echoTailIsNotVoiced)
     vector<pair<double, double> > track = pitchTrack(audio, robust());
     Count note = count(track, 0.1, 0.75, { 220 });
     BOOST_CHECK_GE(note.voiced, int(0.65 * rate / 256) * 9 / 10);
-    BOOST_CHECK_EQUAL(note.near, note.voiced);
+    BOOST_CHECK_EQUAL(note.onVoice, note.voiced);
     BOOST_CHECK_EQUAL(count(track, 0.9, 1.35, { 220 }).voiced, 0);
 }
 

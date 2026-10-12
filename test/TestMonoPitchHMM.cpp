@@ -74,17 +74,17 @@ BOOST_AUTO_TEST_CASE(voicedFloorKeepsStateFrequency)
 {
     // A voiced state the path reached over the floor, with no candidate
     // within a semitone, keeps its own frequency
-    vector<pair<double, double> > far { candidate(440, 0.8) };
+    vector<pair<double, double> > octaveUp { candidate(440, 0.8) };
     MonoPitchHMM plain(0);
     MonoPitchHMM floored(0, 0.2);
     int state = 0;
     while (plain.m_freqs[state] < 220) ++state;
-    BOOST_CHECK_CLOSE(plain.nearestFreq(state, far), 440.0, 1e-4);
-    BOOST_CHECK_CLOSE(floored.nearestFreq(state, far), plain.m_freqs[state], 1e-4);
+    BOOST_CHECK_CLOSE(plain.nearestFreq(state, octaveUp), 440.0, 1e-4);
+    BOOST_CHECK_CLOSE(floored.nearestFreq(state, octaveUp), plain.m_freqs[state], 1e-4);
 
     // a candidate near it still gives its own frequency
-    vector<pair<double, double> > near { candidate(plain.m_freqs[state] * 1.01, 0.8) };
-    BOOST_CHECK_CLOSE(floored.nearestFreq(state, near), plain.m_freqs[state] * 1.01, 1e-4);
+    vector<pair<double, double> > slightlyOff { candidate(plain.m_freqs[state] * 1.01, 0.8) };
+    BOOST_CHECK_CLOSE(floored.nearestFreq(state, slightlyOff), plain.m_freqs[state] * 1.01, 1e-4);
 }
 
 BOOST_AUTO_TEST_CASE(unvoicedHoldDividesUnvoicedMoves)
