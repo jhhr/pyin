@@ -160,6 +160,58 @@ public:
                            double voicedMass) const;
 
     /**
+     * How voiceLikelihoods() tells a voice of its own from a partial or
+     * a sub-harmonic of another. The defaults are the rule that finds
+     * the voices at all; the voice to follow sharpens it (see
+     * VoiceFollower.h).
+     */
+    struct VoiceRule {
+        // The likelihood rises from 0 to 1 as the candidate's
+        // (s / smax)^4 rises from relLow to relHigh
+        double relLow = 0.02;
+        double relHigh = 0.2;
+        // The share a candidate loses at 2, 3 or 4 times another (its
+        // second, third or fourth partial), and at 5 or 6 times
+        double harmonicPenalty = 0.8;
+        double highHarmonicPenalty = 0.8;
+        // Within how much of the window's resolution (or 50 cents, if
+        // wider) a peak lies at the candidate's own f0. Two low voices a
+        // third apart make one peak between them, which a whole
+        // resolution would take for a partial of either
+        double ownPartialResolution = 1.0;
+        // Whether a candidate is a partial of any voice below it (true),
+        // or only of a stronger candidate (false)
+        bool harmonicOfAny = false;
+        // Explaining away: the voices, strongest first, each claim the
+        // part of the peaks at their partials that a smooth spectrum
+        // gives them (or all of it, with explainWhole), and a candidate
+        // is a voice as far as its own partials are left unclaimed. The
+        // share of its harmonic sum left must rise from explainLow to
+        // explainHigh, and be at least explainAccept for it to claim.
+        // The shares are of the amplitudes to explainPower (0: the
+        // salience's compression)
+        bool explain = false;
+        double explainLow = 0.3;
+        double explainHigh = 0.6;
+        double explainAccept = 0.5;
+        double explainPower = 0;
+        bool explainWhole = false;
+    };
+
+    /**
+     * The likelihood, 0 to 1, that each candidate (as next() and
+     * penaliseCommonFundamentals() leave them, highest salience first)
+     * is a voice of its own: clearly present, not at a multiple of a
+     * stronger candidate (an octave, a twelfth or two octaves above
+     * it), and not a sub-harmonic, which has no partial of its own and
+     * a stronger candidate at a multiple of it. A real voice an octave
+     * above another looks like the other's second partial, so a
+     * harmonicPenalty below 1 keeps some likelihood for it.
+     */
+    std::vector<double> voiceLikelihoods(const std::vector<Candidate> &candidates,
+                                         const VoiceRule &rule) const;
+
+    /**
      * Refines a candidate f0 by the least-squares fit of h f0 to the
      * frequencies of the spectral peaks within the tolerance of its
      * first nHarm harmonics. Returns f0 unchanged if none is found.

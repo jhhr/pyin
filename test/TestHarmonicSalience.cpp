@@ -12,6 +12,7 @@
 */
 
 #include "HarmonicSalience.h"
+#include "VoiceFollower.h"
 
 #include <boost/test/unit_test.hpp>
 
@@ -281,6 +282,77 @@ BOOST_AUTO_TEST_CASE(singleVoiceNotPenalised)
     BOOST_CHECK_EQUAL(c[0].salience, 1.0);
     BOOST_CHECK_EQUAL(c[1].salience, 0.3);
     BOOST_CHECK_EQUAL(c[2].salience, 0.3);
+}
+
+// The middle frame's candidates, each with its likelihood of being a
+// voice by the rule
+static vector<pair<double, double> > likelihoods(const vector<float> &audio,
+                                                 const HarmonicSalience::VoiceRule &rule)
+{
+    HarmonicSalience hs(rate, blockSize, stepSize, blockSize / 4,
+                        HarmonicSalience::Params());
+    vector<Candidate> c = middleFrame(audio, hs);
+    vector<double> q = hs.voiceLikelihoods(c, rule);
+    BOOST_REQUIRE_EQUAL(q.size(), c.size());
+    vector<pair<double, double> > out;
+    for (size_t i = 0; i < c.size(); ++i) {
+        out.push_back(pair<double, double>(c[i].freq, q[i]));
+    }
+    return out;
+}
+
+// The likelihood of the candidate within 50 cents of freq, or -1
+static double likelihoodNear(const vector<pair<double, double> > &l, double freq)
+{
+    for (const auto &p : l) {
+        if (std::fabs(cents(p.first, freq)) < 50) return p.second;
+    }
+    return -1;
+}
+
+BOOST_AUTO_TEST_CASE(oneToneIsOneVoice)
+{
+    // Its candidates at its octave and twelfth above are its partials,
+    // and those below it sub-harmonics, with no partial of their own:
+    // only its own f0 is a voice, the partials at most a fifth so
+    // (harmonicPenalty 0.8), and by the higher voice's rule not at all
+    vector<float> audio(rate, 0.f);
+    addTone(audio, 220.0, 0.3);
+    for (bool higher : { false, true }) {
+        BOOST_TEST_CONTEXT((higher ? "higher" : "default")) {
+            vector<pair<double, double> > l = likelihoods
+                (audio, higher ?
+                 VoiceFollower::preferenceRule(VoiceFollower::Higher) :
+                 HarmonicSalience::VoiceRule());
+            BOOST_CHECK_GT(likelihoodNear(l, 220), 0.99);
+            int others = 0;
+            for (const auto &p : l) {
+                if (std::fabs(cents(p.first, 220)) < 50) continue;
+                ++others;
+                BOOST_TEST_CONTEXT(p.first << " Hz") {
+                    BOOST_CHECK_LE(p.second, higher ? 0.0 : 0.2 + 1e-9);
+                }
+            }
+            BOOST_CHECK_GT(others, 0);
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(thirdIsTwoVoices)
+{
+    vector<float> audio(rate, 0.f);
+    addTone(audio, 330.0, 0.3);
+    addTone(audio, 412.5, 0.3);
+    for (bool higher : { false, true }) {
+        BOOST_TEST_CONTEXT((higher ? "higher" : "default")) {
+            vector<pair<double, double> > l = likelihoods
+                (audio, higher ?
+                 VoiceFollower::preferenceRule(VoiceFollower::Higher) :
+                 HarmonicSalience::VoiceRule());
+            BOOST_CHECK_GT(likelihoodNear(l, 330), 0.9);
+            BOOST_CHECK_GT(likelihoodNear(l, 412.5), 0.9);
+        }
+    }
 }
 
 BOOST_AUTO_TEST_SUITE_END()

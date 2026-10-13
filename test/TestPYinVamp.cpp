@@ -190,7 +190,8 @@ BOOST_AUTO_TEST_CASE(parametersDefaultToPyin12)
 {
     PYinVamp plugin(rate);
     const char *ids[] = { "candidaterule", "salmode", "commonf0",
-                          "levelfloor", "voicedfloor", "voicehold" };
+                          "levelfloor", "voicedfloor", "voicehold",
+                          "voicefollow" };
     Vamp::Plugin::ParameterList list = plugin.getParameterDescriptors();
     for (const char *id : ids) {
         BOOST_TEST_CONTEXT(id) {
@@ -215,7 +216,8 @@ BOOST_AUTO_TEST_CASE(zeroIsThePlainAnalysis)
     vector<float> audio = mix(tone(330, 0.25, 1.5), tone(495, 0.25, 1.5));
     Params zero;
     const char *ids[] = { "candidaterule", "salmode", "commonf0",
-                          "levelfloor", "voicedfloor", "voicehold" };
+                          "levelfloor", "voicedfloor", "voicehold",
+                          "voicefollow" };
     for (const char *id : ids) zero[id] = 0.f;
     vector<pair<double, double> > plain = pitchTrack(audio, Params());
     vector<pair<double, double> > zeroed = pitchTrack(audio, zero);
@@ -298,6 +300,167 @@ BOOST_AUTO_TEST_CASE(echoTailIsNotVoiced)
     BOOST_CHECK_GE(note.voiced, int(0.65 * rate / 256) * 9 / 10);
     BOOST_CHECK_EQUAL(note.onVoice, note.voiced);
     BOOST_CHECK_EQUAL(count(track, 0.9, 1.35, { 220 }).voiced, 0);
+}
+
+// A harmonic tone of f0 at one level for the first half and another
+// for the second
+static vector<float> toneInTwoHalves(double f0, double seconds,
+                                     double firstAmp, double secondAmp)
+{
+    vector<float> audio = tone(f0, 1.0, seconds);
+    for (size_t i = 0; i < audio.size(); ++i) {
+        audio[i] *= float(i < audio.size() / 2 ? firstAmp : secondAmp);
+    }
+    return audio;
+}
+
+// Two voices a just major third apart for four seconds, the upper the
+// louder for the first two and the lower for the last two: the
+// strongest voice changes at 2 s
+static vector<float> thirdWithLevelsCrossing()
+{
+    return mix(toneInTwoHalves(220, 4.0, 0.12, 0.3),
+               toneInTwoHalves(275, 4.0, 0.3, 0.12));
+}
+
+static Params following(int voice)
+{
+    Params p = robust();
+    p["voicefollow"] = float(voice);
+    return p;
+}
+
+BOOST_AUTO_TEST_CASE(voiceFollowZeroIsTheStrongest)
+{
+    // 0 is the analysis without it, pitch track and notes alike
+    vector<float> audio = thirdWithLevelsCrossing();
+    Outputs without = run(audio, robust());
+    Outputs zero = run(audio, following(0));
+    for (const char *output : { "smoothedpitchtrack", "notes" }) {
+        BOOST_TEST_CONTEXT(output) {
+            const Vamp::Plugin::FeatureList &a = without[output], &b = zero[output];
+            BOOST_REQUIRE(!a.empty());
+            BOOST_REQUIRE_EQUAL(a.size(), b.size());
+            for (size_t i = 0; i < a.size(); ++i) {
+                BOOST_CHECK(a[i].timestamp == b[i].timestamp);
+                BOOST_CHECK(a[i].values == b[i].values);
+            }
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(lowerAndHigherVoiceAcrossTheCrossing)
+{
+    // The strongest changes voice where the levels cross; the lower and
+    // the higher hold theirs through it, and are voiced where it is
+    vector<float> audio = thirdWithLevelsCrossing();
+    vector<pair<double, double> > strongest = pitchTrack(audio, following(0));
+    vector<pair<double, double> > lower = pitchTrack(audio, following(1));
+    vector<pair<double, double> > higher = pitchTrack(audio, following(2));
+
+    Count before = count(strongest, 0.5, 1.5, { 275 });
+    Count after = count(strongest, 2.5, 3.5, { 220 });
+    BOOST_CHECK_GE(before.onVoice, framesInSpan * 9 / 10);
+    BOOST_CHECK_GE(after.onVoice, framesInSpan * 9 / 10);
+
+    Count low = count(lower, 0.5, 3.5, { 220 });
+    Count high = count(higher, 0.5, 3.5, { 275 });
+    BOOST_CHECK_GE(low.onVoice, 3 * framesInSpan * 9 / 10);
+    BOOST_CHECK_GE(high.onVoice, 3 * framesInSpan * 9 / 10);
+
+    BOOST_REQUIRE_EQUAL(lower.size(), strongest.size());
+    BOOST_REQUIRE_EQUAL(higher.size(), strongest.size());
+    for (size_t i = 0; i < strongest.size(); ++i) {
+        BOOST_CHECK_EQUAL(lower[i].first, strongest[i].first);
+        BOOST_CHECK_EQUAL(higher[i].first, strongest[i].first);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(soloWithAnEchoIsUnchanged)
+{
+    // A note, the next a third up, and the first one's echo 12 dB down
+    // under the start of the second: below it, so "the lower voice" if
+    // anything were, but not long enough together for a passage of two
+    // voices. Every voice to follow gives the strongest's track
+    vector<float> audio = tone(220, 0.3, 1.0);
+    vector<float> second = tone(262, 0.3, 1.0);
+    audio.insert(audio.end(), second.begin(), second.end());
+    vector<float> echo = tone(220, 0.075, 0.4);
+    for (size_t i = 0; i < echo.size(); ++i) audio[rate + i] += echo[i];
+    vector<pair<double, double> > strongest = pitchTrack(audio, following(0));
+    BOOST_REQUIRE(!strongest.empty());
+    for (int voice = 1; voice <= 3; ++voice) {
+        BOOST_TEST_CONTEXT("voicefollow " << voice) {
+            BOOST_CHECK(pitchTrack(audio, following(voice)) == strongest);
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(trackComesOutDuringTheAnalysis)
+{
+    // With a voice to follow, the track still comes out of process()
+    // as the input goes on, a little later than without one: at most
+    // 443 frames after its own (2.6 s), against 100
+    vector<float> audio = mix(tone(220, 0.2, 8.0), tone(275, 0.3, 8.0));
+    PYinVamp plugin(rate);
+    for (const auto &p : following(1)) plugin.setParameter(p.first, p.second);
+    size_t blockSize = plugin.getPreferredBlockSize();
+    size_t stepSize = plugin.getPreferredStepSize();
+    BOOST_REQUIRE(plugin.initialise(1, stepSize, blockSize));
+    int track = -1;
+    Vamp::Plugin::OutputList list = plugin.getOutputDescriptors();
+    for (size_t i = 0; i < list.size(); ++i) {
+        if (list[i].identifier == "smoothedpitchtrack") track = int(i);
+    }
+    BOOST_REQUIRE(track >= 0);
+    vector<float> block(blockSize);
+    int during = 0;
+    double worst = 0;
+    for (size_t start = 0; start < audio.size(); start += stepSize) {
+        for (size_t i = 0; i < blockSize; ++i) {
+            block[i] = start + i < audio.size() ? audio[start + i] : 0.f;
+        }
+        const float *buffers[1] = { &block[0] };
+        Vamp::Plugin::FeatureSet fs = plugin.process
+            (buffers, Vamp::RealTime::frame2RealTime(long(start), rate));
+        for (const auto &f : fs[track]) {
+            ++during;
+            worst = std::max(worst, double(start) / rate - seconds(f.timestamp));
+        }
+    }
+    Vamp::Plugin::FeatureSet rest = plugin.getRemainingFeatures();
+    BOOST_CHECK_GT(during, int(5.0 * rate / stepSize));
+    BOOST_CHECK_LE(worst, 443.0 * stepSize / rate);
+    BOOST_CHECK(!rest[track].empty());
+}
+
+BOOST_AUTO_TEST_CASE(shortInputsAndFullViterbi)
+{
+    // Less input than the fixed lag, or than the gate's window, and the
+    // full Viterbi of fixedlag 0: the voicing is the strongest's
+    vector<float> shortThird = mix(tone(220, 0.2, 0.3), tone(275, 0.3, 0.3));
+    vector<float> third = mix(tone(220, 0.2, 3.0), tone(275, 0.3, 3.0));
+    for (bool full : { false, true }) {
+        for (const vector<float> *audio : { &shortThird, &third }) {
+            BOOST_TEST_CONTEXT((full ? "full Viterbi, " : "fixed lag, ")
+                               << audio->size() << " samples") {
+                Params strongest = following(0), lower = following(1);
+                strongest["outputunvoiced"] = lower["outputunvoiced"] = 2;
+                if (full) strongest["fixedlag"] = lower["fixedlag"] = 0;
+                vector<pair<double, double> > a = pitchTrack(*audio, strongest);
+                vector<pair<double, double> > b = pitchTrack(*audio, lower);
+                BOOST_REQUIRE_EQUAL(a.size(), b.size());
+                for (size_t i = 0; i < a.size(); ++i) {
+                    BOOST_CHECK_EQUAL(a[i].first, b[i].first);
+                    BOOST_CHECK_EQUAL(a[i].second > 0, b[i].second > 0);
+                }
+                if (audio == &third) {
+                    Count low = count(b, 0.5, 2.5, { 220 });
+                    BOOST_CHECK_GE(low.onVoice, 2 * framesInSpan * 9 / 10);
+                }
+            }
+        }
+    }
 }
 
 BOOST_AUTO_TEST_SUITE_END()

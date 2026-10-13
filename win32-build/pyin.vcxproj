@@ -129,6 +129,7 @@
   <ItemGroup>
     <ClCompile Include="..\..\vamp-plugin-sdk\src\vamp-sdk\FFT.cpp" />
     <ClCompile Include="..\HarmonicSalience.cpp" />
+    <ClCompile Include="..\VoiceFollower.cpp" />
     <ClCompile Include="..\LocalCandidatePYIN.cpp" />
     <ClCompile Include="..\MonoNote.cpp" />
     <ClCompile Include="..\MonoNoteHMM.cpp" />
@@ -146,6 +147,7 @@
   <ItemGroup>
     <ClInclude Include="HarmonicSalience.h" />
     <ClInclude Include="LevelGate.h" />
+    <ClInclude Include="VoiceFollower.h" />
     <ClInclude Include="LocalCandidatePYIN.h" />
     <ClInclude Include="MeanFilter.h" />
     <ClInclude Include="MonoNote.h" />

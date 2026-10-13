@@ -321,6 +321,137 @@ HarmonicSalience::candidateProbabilities(const vector<Candidate> &candidates,
     return out;
 }
 
+vector<double>
+HarmonicSalience::voiceLikelihoods(const vector<Candidate> &sc,
+                                   const VoiceRule &rule) const
+{
+    int n = int(sc.size());
+    vector<double> q(n, 0.0);
+    if (n == 0) return q;
+    double smax = sc[0].salience;
+    if (smax <= 0) return q;
+
+    // A partial of its own: a peak at the candidate's f0, within 50
+    // cents or the window's resolution, no more than 20 dB below the
+    // highest
+    double topAmp = 0;
+    for (const auto &pk : m_peaks) topAmp = std::max(topAmp, pk.amp);
+    double minAmp = topAmp * pow(10.0, -20.0 / 20.0);
+    double resolutionHz = rule.ownPartialResolution * m_sampleRate / m_p.windowSize;
+    auto partialAt = [&](double freq) {
+        double tolHz = std::max(freq * (pow(2.0, 50.0 / 1200) - 1), resolutionHz);
+        for (const auto &pk : m_peaks) {
+            if (pk.amp >= minAmp && fabs(pk.freq - freq) < tolHz) return true;
+        }
+        return false;
+    };
+
+    // First the sub-harmonics: no partial of their own, and a stronger
+    // candidate at two to four times them
+    vector<bool> sub(n, false);
+    for (int i = 0; i < n; ++i) {
+        if (partialAt(sc[i].freq)) continue;
+        // the candidates are sorted, so the stronger ones come first
+        for (int j = 0; j < i && !sub[i]; ++j) {
+            for (int m = 2; m <= 4; ++m) {
+                if (fabs(centsBetween(sc[j].freq, m * sc[i].freq)) < 50) {
+                    sub[i] = true;
+                }
+            }
+        }
+    }
+
+    // Explaining away: the share of each candidate's harmonic sum that
+    // the stronger voices leave it
+    vector<double> own(n, 1.0);
+    if (rule.explain && !m_peaks.empty()) {
+        const int nh = m_p.nHarmonics;
+        const double tolRatio = pow(2.0, m_p.tolBins / binsPerOctave);
+        vector<double> claim(m_peaks.size(), 0.0);
+        // the strongest peak within the tolerance of f, or -1
+        auto peakAt = [&](double f) {
+            double lo = f / tolRatio, hi = f * tolRatio;
+            auto it = std::lower_bound(m_peaks.begin(), m_peaks.end(), lo,
+                                       [](const Peak &p, double x) { return p.freq < x; });
+            int best = -1;
+            double bestAmp = 0;
+            for (; it != m_peaks.end() && it->freq <= hi; ++it) {
+                if (it->amp > bestAmp) {
+                    bestAmp = it->amp;
+                    best = int(it - m_peaks.begin());
+                }
+            }
+            return best;
+        };
+        vector<int> idx(nh + 2);
+        vector<double> res(nh + 2);
+        double pw = rule.explainPower > 0 ? rule.explainPower : m_p.beta;
+        for (int i = 0; i < n; ++i) {
+            double raw = 0, left = 0, w = 1;
+            for (int h = 1; h <= nh; ++h) {
+                if (h > 1) w *= m_p.alpha;
+                idx[h] = peakAt(h * sc[i].freq);
+                double a = idx[h] >= 0 ? m_peaks[idx[h]].amp : 0.0;
+                res[h] = idx[h] >= 0 ? std::max(0.0, a - claim[idx[h]]) : 0.0;
+                raw += w * pow(a, pw);
+                left += w * pow(res[h], pw);
+            }
+            own[i] = raw > 0 ? left / raw : 0.0;
+            double rel = pow(sc[i].salience / smax, 4.0);
+            if (sub[i] || own[i] < rule.explainAccept ||
+                rel < rule.relLow || !partialAt(sc[i].freq)) {
+                continue;
+            }
+            // A voice claims of each partial what a smooth spectrum
+            // gives it: no more than the mean of its neighbours, so that
+            // a partial another voice shares keeps the excess
+            res[0] = res[1];
+            res[nh + 1] = 0;
+            for (int h = 1; h <= nh; ++h) {
+                if (idx[h] < 0) continue;
+                double take = res[h];
+                if (h > 1 && !rule.explainWhole) {
+                    take = std::min(take, 0.5 * (res[h - 1] + res[h + 1]));
+                }
+                claim[idx[h]] += take;
+            }
+        }
+    }
+
+    // Then the partials of the voices: at 2 to 6 times a stronger
+    // candidate, or (harmonicOfAny) of any lower one, but never of a
+    // sub-harmonic, which has no partials to lend
+    for (int i = 0; i < n; ++i) {
+        if (sub[i]) continue;
+        double rel = pow(sc[i].salience / smax, 4.0);
+        double g = (rel - rule.relLow) / std::max(1e-9, rule.relHigh - rule.relLow);
+        g = std::max(0.0, std::min(1.0, g));
+        if (rule.explain) {
+            double e = (own[i] - rule.explainLow) /
+                std::max(1e-9, rule.explainHigh - rule.explainLow);
+            g *= std::max(0.0, std::min(1.0, e));
+        }
+        double harm = 0;
+        for (int j = 0; j < n; ++j) {
+            if (j == i || sub[j]) continue;
+            if (rule.harmonicOfAny) {
+                if (sc[j].freq >= sc[i].freq) continue;
+                if (pow(sc[j].salience / smax, 4.0) < rule.relLow) continue;
+            } else if (j > i) {
+                continue;
+            }
+            for (int m = 2; m <= 6; ++m) {
+                if (fabs(centsBetween(sc[i].freq, m * sc[j].freq)) < 50) {
+                    harm = std::max(harm, m <= 4 ? rule.harmonicPenalty
+                                    : rule.highHarmonicPenalty);
+                }
+            }
+        }
+        q[i] = g * (1.0 - harm);
+    }
+    return q;
+}
+
 double
 HarmonicSalience::refine(double f0, int nHarm) const
 {

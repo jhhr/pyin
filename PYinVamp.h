@@ -20,6 +20,7 @@
 #include "MonoPitchHMM.h"
 #include "HarmonicSalience.h"
 #include "LevelGate.h"
+#include "VoiceFollower.h"
 
 #include <memory>
 
@@ -117,8 +118,20 @@ protected:
     float m_voicedFloor;
     float m_voiceHold;
 
+    // With salience candidates, which voice the track follows where two
+    // or three sing: 0 the strongest, as the pitch HMM alone does; 1 the
+    // lower, 2 the higher, 3 the middle one (see VoiceFollower.h)
+    float m_voiceFollow;
+
     std::unique_ptr<HarmonicSalience> m_salience;
     std::unique_ptr<LevelGate> m_levelGate;
+    std::unique_ptr<VoiceFollower> m_follower;
+
+    // With a voice to follow, the frame salienceCandidates() last gave:
+    // each candidate's likelihood of being a voice by the follower's
+    // rule, and its voices for the follower's gate
+    vector<double> m_lastLikelihoods;
+    vector<VoiceFollower::GateVoice> m_lastGateVoices;
 
     // Frames whose salience window reaches past the blocks given so far
     struct WaitingFrame {
@@ -136,6 +149,10 @@ protected:
     // the probability that it is voiced
     vector<pair<double, double> > salienceCandidates
         (const vector<pair<double, double> > &yinFreqProb, float rms);
+
+    // Adds the follower's track entries to the pitch track and its output
+    void addEntries(const vector<VoiceFollower::Entry> &entries,
+                    FeatureSet &fs);
 
     void addNoteFeatures(FeatureSet &fs);
 };
