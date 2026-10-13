@@ -96,9 +96,9 @@ public:
      * candidates (MIDI pitch, probability) as the first path gets them,
      * each one's likelihood of being a voice by preferenceRule(), the
      * frame's voices for the gate, and the factor the first path's voiced
-     * floor is scaled by (the level gate's, 1 with none), which scales the
-     * floor here as well and counts against the frame's voices in the
-     * preference.
+     * floor is scaled by (the level gate's, or without one the frame's
+     * own level's), which scales the floor here as well and counts
+     * against the frame's voices in the preference.
      */
     void addFrame(const std::vector<std::pair<double, double> > &pitchProb,
                   const std::vector<double> &likelihoods,

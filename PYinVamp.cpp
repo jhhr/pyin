@@ -295,7 +295,7 @@ PYinVamp::getParameterDescriptors() const
     d.identifier = "voicedfloor";
     d.valueNames.clear();
     d.name = "Voiced gap bridging";
-    d.description = "Lets the pitch track cross frames that have no candidate near it rather than break: the least likelihood of a voiced pitch, relative to that of no pitch (0: none).";
+    d.description = "Lets the pitch track cross frames that have no candidate near it rather than break: the least likelihood of a voiced pitch, relative to that of no pitch (0: none). It fades in quiet frames: those the level floor gates, or without a level floor, those below 0.04 RMS, so that it bridges gaps in singing and not the rests between phrases.";
     d.unit = "";
     d.minValue = 0.0f;
     d.maxValue = 1.0f;
@@ -766,6 +766,15 @@ PYinVamp::addFrame(const Yin::YinOutput &yo, float rms, RealTime timestamp,
             }
         }
         // the floor bridges gaps in loud singing, not into a tail
+        m_pitchHmm.m_voicedFloor = m_voicedFloor * gate;
+    } else if (m_voicedFloor > 0) {
+        // Without a gate, which needs the last ten seconds, the floor
+        // fades with the frame's own level, from 0.04 RMS to none at 0.02
+        // (-28 to -34 dB): it bridges gaps in singing, not the rests
+        // between phrases. A run over part of the audio then gives what
+        // a run over all of it does
+        const double floorLow = 0.02, floorHigh = 0.04;
+        gate = std::max(0.0, std::min(1.0, (rms - floorLow) / (floorHigh - floorLow)));
         m_pitchHmm.m_voicedFloor = m_voicedFloor * gate;
     }
 

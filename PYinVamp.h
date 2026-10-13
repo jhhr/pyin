@@ -116,8 +116,9 @@ protected:
     float m_levelFloor;
 
     // MonoPitchHMM's voiced floor (scaled by the level gate, so that it
-    // bridges gaps in loud singing and not into a quiet tail) and its
-    // unvoiced hold
+    // bridges gaps in loud singing and not into a quiet tail, or without
+    // one by the frame's own level, so that it does not bridge the rests)
+    // and its unvoiced hold
     float m_voicedFloor;
     float m_voiceHold;
 

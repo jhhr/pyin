@@ -348,6 +348,64 @@ BOOST_AUTO_TEST_CASE(lowBleedBetweenPhrasesIsNotVoiced)
     }
 }
 
+BOOST_AUTO_TEST_CASE(withoutALevelFloorTheFloorBridgesNoRests)
+{
+    // One clean voice, as a singer's take is: notes of 0.45 s with 50 ms
+    // between them, and a little breath. The pitch settings of a song's
+    // analysis without its level floor, whose ten seconds of history a
+    // take's analysis of a range cannot have: the voiced floor fades with
+    // the frame's own level instead, and the track breaks in the gaps
+    // much as pYIN's own does (a third of their hops voiced, against 96%
+    // with the floor unfaded)
+    const double hz[] = { 220, 262, 294, 330, 262, 196 };
+    const double amp[] = { 0.3, 0.45, 0.35, 0.5, 0.4, 0.3 };
+    vector<float> audio(size_t(12 * rate));
+    for (size_t i = 0; i < audio.size(); ++i) {
+        double t = std::fmod(double(i) / rate, 3.0);
+        int note = int(t / 0.5);
+        double tau = t - 0.5 * note, v = 0;
+        if (tau < 0.45) {
+            double env = std::min({ 1.0, tau / 0.02, (0.45 - tau) / 0.04 });
+            for (int h = 1; h <= 4; ++h) {
+                v += amp[note] * env * std::sin(2 * pi * h * hz[note] * tau + 0.7 * h * note) / h;
+            }
+        }
+        unsigned seed = 12345;
+        for (int k = 0; k < 12; ++k) {
+            seed = seed * 1103515245u + 12345u;
+            v += 0.004 * std::sin(2 * pi * (400.0 + double(seed % 6000)) * t + 0.37 * k);
+        }
+        audio[i] = float(v);
+    }
+    Params take = robust();
+    take.erase("levelfloor");
+    Params plain;
+    plain["lowampsuppression"] = 0.2f;
+    for (const Params &p : { take, plain }) {
+        vector<pair<double, double> > track = pitchTrack(audio, p);
+        int gaps = 0, voicedInGaps = 0, onTheNote = 0, sounding = 0;
+        std::map<long, double> at;
+        for (const auto &x : track) at[std::lround(x.first * rate / 256)] = x.second;
+        for (long k = 0; k * 256 < long(audio.size()); ++k) {
+            double t = std::fmod(k * 256.0 / rate, 3.0);
+            int note = int(t / 0.5);
+            double tau = t - 0.5 * note;
+            bool voiced = at.count(k) && at[k] > 0;
+            if (tau > 0.46) {
+                ++gaps;
+                if (voiced) ++voicedInGaps;
+            } else if (tau >= 0.03 && tau <= 0.42) {
+                ++sounding;
+                if (voiced && std::fabs(1200 * std::log2(at[k] / hz[note])) < 50) ++onTheNote;
+            }
+        }
+        BOOST_TEST_CONTEXT((p.count("salmode") ? "a take" : "pYIN's own")) {
+            BOOST_CHECK_EQUAL(onTheNote, sounding);
+            BOOST_CHECK_LE(voicedInGaps, gaps / 2);
+        }
+    }
+}
+
 // A harmonic tone of f0 at one level for the first half and another
 // for the second
 static vector<float> toneInTwoHalves(double f0, double seconds,
