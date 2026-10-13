@@ -442,26 +442,91 @@ BOOST_AUTO_TEST_CASE(soloWithAnEchoIsUnchanged)
     }
 }
 
+// Two lists of features the same, stamp and value
+static void checkSameFeatures(const Vamp::Plugin::FeatureList &a,
+                              const Vamp::Plugin::FeatureList &b)
+{
+    BOOST_REQUIRE_EQUAL(a.size(), b.size());
+    for (size_t i = 0; i < a.size(); ++i) {
+        BOOST_CHECK(a[i].timestamp == b[i].timestamp);
+        BOOST_CHECK(a[i].values == b[i].values);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(voiceTracksAreEachVoicesOwn)
+{
+    // With the voices' tracks, one run gives each voice's track as the
+    // run following that voice gives it, whichever voice its own track
+    // follows; and the track and notes are as without them
+    vector<float> audio = thirdWithLevelsCrossing();
+    const char *outputs[] = { "strongestvoice", "lowervoice", "highervoice" };
+    Outputs alone[3];
+    for (int voice = 0; voice < 3; ++voice) alone[voice] = run(audio, following(voice));
+    for (int follow = 0; follow < 2; ++follow) {
+        Params p = following(follow);
+        p["voicetracks"] = 1;
+        Outputs both = run(audio, p);
+        BOOST_TEST_CONTEXT("voicefollow " << follow) {
+            checkSameFeatures(both["smoothedpitchtrack"],
+                              alone[follow]["smoothedpitchtrack"]);
+            checkSameFeatures(both["notes"], alone[follow]["notes"]);
+            for (int voice = 0; voice < 3; ++voice) {
+                BOOST_TEST_CONTEXT(outputs[voice]) {
+                    BOOST_CHECK(!both[outputs[voice]].empty());
+                    checkSameFeatures(both[outputs[voice]],
+                                      alone[voice]["smoothedpitchtrack"]);
+                }
+            }
+        }
+    }
+    // and none without them
+    for (const char *output : outputs) {
+        BOOST_CHECK(alone[1][output].empty());
+    }
+}
+
+BOOST_AUTO_TEST_CASE(voiceTracksWithoutSalienceAreTheTrack)
+{
+    // pYIN's own candidates tell no voices apart: each voice's track is
+    // the track
+    vector<float> audio = thirdWithLevelsCrossing();
+    Params p;
+    p["voicetracks"] = 1;
+    p["voicefollow"] = 1;
+    Outputs o = run(audio, p);
+    BOOST_REQUIRE(!o["smoothedpitchtrack"].empty());
+    for (const char *output : { "strongestvoice", "lowervoice", "highervoice" }) {
+        BOOST_TEST_CONTEXT(output) {
+            checkSameFeatures(o[output], o["smoothedpitchtrack"]);
+        }
+    }
+}
+
 BOOST_AUTO_TEST_CASE(trackComesOutDuringTheAnalysis)
 {
     // With a voice to follow, the track still comes out of process()
     // as the input goes on, a little later than without one: at most
-    // 443 frames after its own (2.6 s), against 100
+    // 443 frames after its own (2.6 s), against 100. So do the voices'
+    // own tracks
     vector<float> audio = mix(tone(220, 0.2, 8.0), tone(275, 0.3, 8.0));
     PYinVamp plugin(rate);
     for (const auto &p : following(1)) plugin.setParameter(p.first, p.second);
+    plugin.setParameter("voicetracks", 1);
     size_t blockSize = plugin.getPreferredBlockSize();
     size_t stepSize = plugin.getPreferredStepSize();
     BOOST_REQUIRE(plugin.initialise(1, stepSize, blockSize));
-    int track = -1;
+    vector<int> tracks;
     Vamp::Plugin::OutputList list = plugin.getOutputDescriptors();
     for (size_t i = 0; i < list.size(); ++i) {
-        if (list[i].identifier == "smoothedpitchtrack") track = int(i);
+        for (const char *output : { "smoothedpitchtrack", "strongestvoice",
+                                    "lowervoice", "highervoice" }) {
+            if (list[i].identifier == output) tracks.push_back(int(i));
+        }
     }
-    BOOST_REQUIRE(track >= 0);
+    BOOST_REQUIRE_EQUAL(tracks.size(), size_t(4));
     vector<float> block(blockSize);
-    int during = 0;
-    double worst = 0;
+    vector<int> during(4, 0);
+    vector<double> worst(4, 0.0);
     for (size_t start = 0; start < audio.size(); start += stepSize) {
         for (size_t i = 0; i < blockSize; ++i) {
             block[i] = start + i < audio.size() ? audio[start + i] : 0.f;
@@ -469,15 +534,22 @@ BOOST_AUTO_TEST_CASE(trackComesOutDuringTheAnalysis)
         const float *buffers[1] = { &block[0] };
         Vamp::Plugin::FeatureSet fs = plugin.process
             (buffers, Vamp::RealTime::frame2RealTime(long(start), rate));
-        for (const auto &f : fs[track]) {
-            ++during;
-            worst = std::max(worst, double(start) / rate - seconds(f.timestamp));
+        for (size_t t = 0; t < tracks.size(); ++t) {
+            for (const auto &f : fs[tracks[t]]) {
+                ++during[t];
+                worst[t] = std::max(worst[t],
+                                    double(start) / rate - seconds(f.timestamp));
+            }
         }
     }
     Vamp::Plugin::FeatureSet rest = plugin.getRemainingFeatures();
-    BOOST_CHECK_GT(during, int(5.0 * rate / stepSize));
-    BOOST_CHECK_LE(worst, 443.0 * stepSize / rate);
-    BOOST_CHECK(!rest[track].empty());
+    for (size_t t = 0; t < tracks.size(); ++t) {
+        BOOST_TEST_CONTEXT(list[tracks[t]].identifier) {
+            BOOST_CHECK_GT(during[t], int(5.0 * rate / stepSize));
+            BOOST_CHECK_LE(worst[t], 443.0 * stepSize / rate);
+            BOOST_CHECK(!rest[tracks[t]].empty());
+        }
+    }
 }
 
 BOOST_AUTO_TEST_CASE(shortInputsAndFullViterbi)

@@ -75,6 +75,9 @@ protected:
     mutable int m_oCandidateSalience;
     mutable int m_oSmoothedPitchTrack;
     mutable int m_oNotes;
+    mutable int m_oStrongestVoice;
+    mutable int m_oLowerVoice;
+    mutable int m_oHigherVoice;
 
     float m_threshDistr;
     float m_fixedLag;
@@ -123,14 +126,36 @@ protected:
     // lower, 2 the higher, 3 the middle one (see VoiceFollower.h)
     float m_voiceFollow;
 
+    // Whether the strongest, the lower and the higher voice's tracks are
+    // given as well, each as an output of its own: the track as it is
+    // with each of those voices to follow, from the same run
+    float m_voiceTracks;
+
     std::unique_ptr<HarmonicSalience> m_salience;
     std::unique_ptr<LevelGate> m_levelGate;
-    std::unique_ptr<VoiceFollower> m_follower;
 
-    // With a voice to follow, the frame salienceCandidates() last gave:
-    // each candidate's likelihood of being a voice by the follower's
-    // rule, and its voices for the follower's gate
-    vector<double> m_lastLikelihoods;
+    // A follower for each voice a track follows: the track's own voice,
+    // and with the voices' tracks the lower and the higher
+    vector<std::unique_ptr<VoiceFollower> > m_followers;
+
+    // The outputs that are pitch tracks, and where each one's entries
+    // come from: -1, the pitch HMM's own path, or a follower's index.
+    // The output's index is looked up as an entry goes out, as a host may
+    // ask for the outputs after initialise(). The smoothed pitch track's
+    // entries are the notes' as well
+    struct TrackOutput {
+        const int *output;
+        int source;
+    };
+    vector<TrackOutput> m_trackOutputs;
+
+    // The frames given to the pitch HMM so far
+    int m_frameCount;
+
+    // With followers, the frame salienceCandidates() last gave: each
+    // candidate's likelihood of being a voice by each follower's rule,
+    // and its voices for the followers' gate
+    vector<vector<double> > m_lastLikelihoods;
     vector<VoiceFollower::GateVoice> m_lastGateVoices;
 
     // Frames whose salience window reaches past the blocks given so far
@@ -150,9 +175,17 @@ protected:
     vector<pair<double, double> > salienceCandidates
         (const vector<pair<double, double> > &yinFreqProb, float rms);
 
-    // Adds the follower's track entries to the pitch track and its output
-    void addEntries(const vector<VoiceFollower::Entry> &entries,
-                    FeatureSet &fs);
+    // An entry of the pitch HMM's own path: to the followers, and to the
+    // outputs that are that path's
+    void addFirst(const VoiceFollower::Entry &e, FeatureSet &fs);
+
+    // The followers' entries that can come out now, to their outputs
+    void takeFollowerEntries(FeatureSet &fs);
+
+    // An entry of a pitch track output (and of the notes', if it is the
+    // smoothed pitch track's)
+    void addTrackEntry(const VoiceFollower::Entry &e, const int *output,
+                       FeatureSet &fs);
 
     void addNoteFeatures(FeatureSet &fs);
 };

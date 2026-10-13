@@ -41,6 +41,9 @@ PYinVamp::PYinVamp(float inputSampleRate) :
     m_oCandidateSalience(0),
     m_oSmoothedPitchTrack(0),
     m_oNotes(0),
+    m_oStrongestVoice(0),
+    m_oLowerVoice(0),
+    m_oHigherVoice(0),
     m_threshDistr(2.0f),
     m_fixedLag(1.0f),
     m_outputUnvoiced(0.0f),
@@ -59,7 +62,9 @@ PYinVamp::PYinVamp(float inputSampleRate) :
     m_levelFloor(0.0f),
     m_voicedFloor(0.0f),
     m_voiceHold(0.0f),
-    m_voiceFollow(0.0f)
+    m_voiceFollow(0.0f),
+    m_voiceTracks(0.0f),
+    m_frameCount(0)
 {
 }
 
@@ -325,6 +330,18 @@ PYinVamp::getParameterDescriptors() const
     d.valueNames.push_back("Middle");
     list.push_back(d);
 
+    d.identifier = "voicetracks";
+    d.valueNames.clear();
+    d.name = "Each voice's own track";
+    d.description = "Also gives the pitch track as it is with each voice to follow, the strongest, the lower and the higher, as outputs of their own from the same run, whatever the track itself follows. Each voice the track does not follow costs a second path of its own. Without the salience candidates there are no voices to tell apart, and each of them is the track.";
+    d.unit = "";
+    d.minValue = 0.0f;
+    d.maxValue = 1.0f;
+    d.defaultValue = 0.0f;
+    d.isQuantized = true;
+    d.quantizeStep = 1.0f;
+    list.push_back(d);
+
     return list;
 }
 
@@ -372,6 +389,9 @@ PYinVamp::getParameter(string identifier) const
     }
     if (identifier == "voicefollow") {
             return m_voiceFollow;
+    }
+    if (identifier == "voicetracks") {
+            return m_voiceTracks;
     }
     return 0.f;
 }
@@ -434,6 +454,10 @@ PYinVamp::setParameter(string identifier, float value)
     if (identifier == "voicefollow")
     {
         m_voiceFollow = value;
+    }
+    if (identifier == "voicetracks")
+    {
+        m_voiceTracks = value;
     }
 }
 
@@ -553,6 +577,30 @@ PYinVamp::getOutputDescriptors() const
     outputs.push_back(d);
     m_oNotes = outputNumber++;
 
+    // The voices' own tracks (the voicetracks parameter), as the smoothed
+    // pitch track is with each voice to follow: nothing without them
+    const char *voices[][3] = {
+        { "strongestvoice", "Strongest Voice Track", "The smoothed pitch track as it is following the strongest voice where two or three sing (with the voices' tracks asked for)" },
+        { "lowervoice", "Lower Voice Track", "The smoothed pitch track as it is following the lower voice where two or three sing (with the voices' tracks asked for)" },
+        { "highervoice", "Higher Voice Track", "The smoothed pitch track as it is following the higher voice where two or three sing (with the voices' tracks asked for)" }
+    };
+    int *indices[] = { &m_oStrongestVoice, &m_oLowerVoice, &m_oHigherVoice };
+    for (int i = 0; i < 3; ++i) {
+        d.identifier = voices[i][0];
+        d.name = voices[i][1];
+        d.description = voices[i][2];
+        d.unit = "Hz";
+        d.hasFixedBinCount = true;
+        d.binCount = 1;
+        d.hasKnownExtents = false;
+        d.isQuantized = false;
+        d.sampleType = OutputDescriptor::FixedSampleRate;
+        d.sampleRate = (m_inputSampleRate / m_stepSize);
+        d.hasDuration = false;
+        outputs.push_back(d);
+        *indices[i] = outputNumber++;
+    }
+
     return outputs;
 }
 
@@ -597,14 +645,33 @@ PYinVamp::reset()
     } else {
         m_levelGate.reset();
     }
-    int follow = int(lrintf(m_voiceFollow));
-    if (m_salience && follow >= VoiceFollower::Lower && follow <= VoiceFollower::Middle) {
-        m_follower.reset(new VoiceFollower(VoiceFollower::Voice(follow), lag,
-                                           m_voicedFloor, m_voiceHold));
-    } else {
-        m_follower.reset();
+    // The followers, one for each voice a track follows, and where each
+    // pitch track output's entries come from: the pitch HMM's own path
+    // follows the strongest voice
+    m_followers.clear();
+    m_trackOutputs.clear();
+    auto source = [&](int voice) {
+        if (voice < VoiceFollower::Lower || voice > VoiceFollower::Middle ||
+            !m_salience) {
+            return -1;
+        }
+        for (size_t i = 0; i < m_followers.size(); ++i) {
+            if (m_followers[i]->voice() == voice) return int(i);
+        }
+        m_followers.push_back(std::unique_ptr<VoiceFollower>
+                              (new VoiceFollower(VoiceFollower::Voice(voice), lag,
+                                                 m_voicedFloor, m_voiceHold)));
+        return int(m_followers.size()) - 1;
+    };
+    m_trackOutputs.push_back({ &m_oSmoothedPitchTrack,
+                               source(int(lrintf(m_voiceFollow))) });
+    if (m_voiceTracks > 0.5f) {
+        m_trackOutputs.push_back({ &m_oStrongestVoice, -1 });
+        m_trackOutputs.push_back({ &m_oLowerVoice, source(VoiceFollower::Lower) });
+        m_trackOutputs.push_back({ &m_oHigherVoice, source(VoiceFollower::Higher) });
     }
-    m_lastLikelihoods.clear();
+    m_frameCount = 0;
+    m_lastLikelihoods.assign(m_followers.size(), vector<double>());
     m_lastGateVoices.clear();
     m_waiting.clear();
     
@@ -702,10 +769,11 @@ PYinVamp::addFrame(const Yin::YinOutput &yo, float rms, RealTime timestamp,
         m_pitchHmm.m_voicedFloor = m_voicedFloor * gate;
     }
 
-    // The follower's second path takes the same candidates
-    if (m_follower) {
-        m_follower->addFrame(tempPitchProb, m_lastLikelihoods,
-                             m_lastGateVoices, gate);
+    // The followers' second paths take the same candidates
+    ++m_frameCount;
+    for (size_t i = 0; i < m_followers.size(); ++i) {
+        m_followers[i]->addFrame(tempPitchProb, m_lastLikelihoods[i],
+                                 m_lastGateVoices, gate);
     }
 
     vector<double> tempObsProb = m_pitchHmm.calculateObsProb(tempPitchProb);
@@ -728,43 +796,16 @@ PYinVamp::addFrame(const Yin::YinOutput &yo, float rms, RealTime timestamp,
             m_timestamp.pop_front();
             m_pitchProb.pop_front();
 
-            Feature f;
-            f.hasTimestamp = true;
             vector<int> rawPitchPath = m_pitchHmm.track();
-            float freq = m_pitchHmm.nearestFreq(rawPitchPath[0], 
-                                                m_pitchProb[0]);
-            if (m_follower) {
-                // the entry waits for the follower's gate
-                VoiceFollower::Entry e;
-                e.frame = m_follower->frameCount() - lag;
-                e.freq = freq;
-                e.timestamp = m_timestamp[0];
-                m_follower->addFirst(e);
-            } else {
-                m_pitchTrack.push_back(freq);
-                f.timestamp = m_timestamp[0];
-                f.values.clear();
-
-                // different output modes
-                if (freq < 0 && (m_outputUnvoiced==0))
-                {
-
-                } else {
-                    if (m_outputUnvoiced == 1)
-                    {
-                        f.values.push_back(fabs(freq));
-                    } else {
-                        f.values.push_back(freq);
-                    }
-                    fs[m_oSmoothedPitchTrack].push_back(f);
-                }
-            }
+            VoiceFollower::Entry e;
+            e.frame = m_frameCount - lag;
+            e.freq = m_pitchHmm.nearestFreq(rawPitchPath[0], m_pitchProb[0]);
+            e.timestamp = m_timestamp[0];
+            addFirst(e, fs);
         }
     }
 
-    if (m_follower) {
-        addEntries(m_follower->takeEntries(), fs);
-    }
+    takeFollowerEntries(fs);
 
     // F0 CANDIDATES
     Feature f;
@@ -819,10 +860,6 @@ PYinVamp::getRemainingFeatures()
         return fs;
     }
 
-    Feature f;
-    f.hasTimestamp = true;
-    f.hasDuration = false;
-
     // ================== P I T C H  T R A C K =================================
 
     // NB we do this even in fixed-lag mode, as we still have the last
@@ -832,36 +869,17 @@ PYinVamp::getRemainingFeatures()
     
     for (size_t iFrame = 0; iFrame < rawPitchPath.size(); ++iFrame)
     {
-        float freq = m_pitchHmm.nearestFreq(rawPitchPath[iFrame], 
-                                            m_pitchProb[iFrame]);
-        if (m_follower) {
-            VoiceFollower::Entry e;
-            e.frame = m_follower->frameCount() - int(rawPitchPath.size()) + int(iFrame);
-            e.freq = freq;
-            e.timestamp = m_timestamp[iFrame];
-            m_follower->addFirst(e);
-            continue;
-        }
-        m_pitchTrack.push_back(freq); // for note processing below
-        
-        f.timestamp = m_timestamp[iFrame];
-        f.values.clear();
-        
-        // different output modes
-        if (freq < 0 && (m_outputUnvoiced==0)) continue;
-        if (m_outputUnvoiced == 1)
-        {
-            f.values.push_back(fabs(freq));
-        } else {
-            f.values.push_back(freq);
-        }
-        fs[m_oSmoothedPitchTrack].push_back(f);
+        VoiceFollower::Entry e;
+        e.frame = m_frameCount - int(rawPitchPath.size()) + int(iFrame);
+        e.freq = m_pitchHmm.nearestFreq(rawPitchPath[iFrame], m_pitchProb[iFrame]);
+        e.timestamp = m_timestamp[iFrame];
+        addFirst(e, fs);
     }
 
-    if (m_follower) {
-        m_follower->finish();
-        addEntries(m_follower->takeEntries(), fs);
+    for (size_t i = 0; i < m_followers.size(); ++i) {
+        m_followers[i]->finish();
     }
+    takeFollowerEntries(fs);
 
     addNoteFeatures(fs);
 
@@ -869,20 +887,46 @@ PYinVamp::getRemainingFeatures()
 }
 
 void
-PYinVamp::addEntries(const vector<VoiceFollower::Entry> &entries,
-                     FeatureSet &fs)
+PYinVamp::addFirst(const VoiceFollower::Entry &e, FeatureSet &fs)
 {
+    // A follower's entry waits for its gate
+    for (size_t i = 0; i < m_followers.size(); ++i) {
+        m_followers[i]->addFirst(e);
+    }
+    for (const TrackOutput &to : m_trackOutputs) {
+        if (to.source < 0) addTrackEntry(e, to.output, fs);
+    }
+}
+
+void
+PYinVamp::takeFollowerEntries(FeatureSet &fs)
+{
+    for (size_t i = 0; i < m_followers.size(); ++i) {
+        vector<VoiceFollower::Entry> entries = m_followers[i]->takeEntries();
+        for (const TrackOutput &to : m_trackOutputs) {
+            if (to.source != int(i)) continue;
+            for (const VoiceFollower::Entry &e : entries) {
+                addTrackEntry(e, to.output, fs);
+            }
+        }
+    }
+}
+
+void
+PYinVamp::addTrackEntry(const VoiceFollower::Entry &e, const int *output,
+                        FeatureSet &fs)
+{
+    if (output == &m_oSmoothedPitchTrack) {
+        m_pitchTrack.push_back(e.freq); // for the notes at the end
+    }
+    // different output modes
+    if (e.freq < 0 && m_outputUnvoiced == 0) return;
     Feature f;
     f.hasTimestamp = true;
     f.hasDuration = false;
-    for (const VoiceFollower::Entry &e : entries) {
-        m_pitchTrack.push_back(e.freq); // for the notes at the end
-        if (e.freq < 0 && m_outputUnvoiced == 0) continue;
-        f.timestamp = e.timestamp;
-        f.values.clear();
-        f.values.push_back(m_outputUnvoiced == 1 ? fabs(e.freq) : e.freq);
-        fs[m_oSmoothedPitchTrack].push_back(f);
-    }
+    f.timestamp = e.timestamp;
+    f.values.push_back(m_outputUnvoiced == 1 ? fabs(e.freq) : e.freq);
+    fs[*output].push_back(f);
 }
 
 void
@@ -1026,9 +1070,11 @@ PYinVamp::salienceCandidates(const vector<pair<double, double> > &yinFreqProb,
     // voiced at all
     voiced *= levelRamp(0.05f, 0.15f);
 
-    if (m_follower) {
-        m_lastLikelihoods = m_salience->voiceLikelihoods
-            (candidates, VoiceFollower::preferenceRule(m_follower->voice()));
+    if (!m_followers.empty()) {
+        for (size_t i = 0; i < m_followers.size(); ++i) {
+            m_lastLikelihoods[i] = m_salience->voiceLikelihoods
+                (candidates, VoiceFollower::preferenceRule(m_followers[i]->voice()));
+        }
         vector<double> gateLikelihoods = m_salience->voiceLikelihoods
             (candidates, VoiceFollower::gateRule());
         m_lastGateVoices.clear();
