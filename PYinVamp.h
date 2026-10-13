@@ -109,7 +109,7 @@ protected:
     float m_commonF0;
 
     // Frames more than this many dB below the level of the last ten
-    // seconds are faded out of voicing (see LevelGate.h)
+    // seconds' singing are faded out of voicing (see LevelGate.h)
     float m_levelFloor;
 
     // MonoPitchHMM's voiced floor (scaled by the level gate, so that it

@@ -122,6 +122,76 @@ BOOST_AUTO_TEST_CASE(thirdGivesBothVoices)
     BOOST_CHECK(!hasCandidateNear(c, 82.5, 3, 50));
 }
 
+BOOST_AUTO_TEST_CASE(refineKeepsAQuieterVoiceInTune)
+{
+    // A tempered major third, the lower voice 6 dB quieter. Its fifth
+    // harmonic lies 14 cents from the upper voice's fourth, within the
+    // tolerance, and the louder partial there is the other voice's: the
+    // lower voice's own harmonics still put it within two cents
+    vector<float> audio(rate, 0.f);
+    const double upper = 220.0 * std::pow(2.0, 4 / 12.0);
+    addTone(audio, 220.0, 0.15);
+    addTone(audio, upper, 0.3);
+    HarmonicSalience hs(rate, blockSize, stepSize, blockSize / 4,
+                        HarmonicSalience::Params());
+    vector<Candidate> c = middleFrame(audio, hs);
+    bool found = false;
+    for (const Candidate &k : c) {
+        if (std::fabs(cents(k.freq, 220.0)) < 50) {
+            found = true;
+            BOOST_CHECK_SMALL(cents(hs.refine(k.freq, 5), 220.0), 2.0);
+        }
+        if (std::fabs(cents(k.freq, upper)) < 50) {
+            BOOST_CHECK_SMALL(cents(hs.refine(k.freq, 5), upper), 2.0);
+        }
+    }
+    BOOST_CHECK(found);
+}
+
+BOOST_AUTO_TEST_CASE(leakageBelowTheRangeIsNoPartial)
+{
+    // A rumble at 30 Hz, a kick drum's 48 Hz and DC, below the lowest
+    // peak: their window's first sidelobes, 54 Hz above them and 31.5 dB
+    // down, are maxima of the spectrum, and were a low voice's partials
+    const double kickRate = 8.0;
+    for (int kind = 0; kind < 3; ++kind) {
+        vector<float> audio(rate, 0.f);
+        for (size_t i = 0; i < audio.size(); ++i) {
+            double t = double(i) / rate;
+            if (kind == 0) audio[i] = float(0.1 * std::sin(2 * pi * 30 * t));
+            else if (kind == 1) {
+                double tk = std::fmod(t, 0.5);
+                audio[i] = float(0.3 * std::exp(-tk * kickRate) *
+                                 std::sin(2 * pi * 48 * tk));
+            } else audio[i] = 0.05f;
+        }
+        HarmonicSalience hs(rate, blockSize, stepSize, blockSize / 4,
+                            HarmonicSalience::Params());
+        vector<Candidate> c = middleFrame(audio, hs);
+        BOOST_TEST_CONTEXT("kind " << kind) {
+            BOOST_CHECK(hs.peaks().empty());
+            BOOST_CHECK(c.empty());
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(voiceOverARumbleKeepsItsPartials)
+{
+    // A low voice at 100 Hz under a rumble at 30 Hz 10 dB louder than
+    // its fundamental: its partials stand far above the rumble's leakage
+    vector<float> audio(rate, 0.f);
+    addTone(audio, 100.0, 0.1);
+    for (size_t i = 0; i < audio.size(); ++i) {
+        audio[i] += float(0.316 * std::sin(2 * pi * 30 * i / rate));
+    }
+    HarmonicSalience hs(rate, blockSize, stepSize, blockSize / 4,
+                        HarmonicSalience::Params());
+    vector<Candidate> c = middleFrame(audio, hs);
+    BOOST_REQUIRE(!c.empty());
+    BOOST_CHECK_SMALL(cents(c[0].freq, 100.0), 10.0);
+    BOOST_CHECK_SMALL(cents(hs.refine(c[0].freq, 5), 100.0), 2.0);
+}
+
 BOOST_AUTO_TEST_CASE(silenceGivesNothing)
 {
     vector<float> audio(rate, 0.f);

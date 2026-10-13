@@ -683,7 +683,16 @@ PYinVamp::addFrame(const Yin::YinOutput &yo, float rms, RealTime timestamp,
 
     double gate = 1;
     if (m_levelGate) {
-        gate = m_levelGate->process(rms);
+        // The gate's reference is the singing's level: a frame counts as
+        // sung where its candidates hold at least a quarter of the
+        // probability that it is voiced, before the low-amplitude fade.
+        // Silence, breaths and most noise hold next to none
+        const double sungMass = 0.25;
+        double voicedMass = 0;
+        for (size_t i = 0; i < yo.freqProb.size(); ++i) {
+            voicedMass += yo.freqProb[i].second;
+        }
+        gate = m_levelGate->process(rms, voicedMass >= sungMass);
         if (gate < 1) {
             for (size_t i = 0; i < tempPitchProb.size(); ++i) {
                 tempPitchProb[i].second *= gate;

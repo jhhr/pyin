@@ -313,7 +313,7 @@ VoiceFollower::feedRankFrame()
         }
     }
 
-    feedSecondPath(pp, rf.gate);
+    feedSecondPath(pp, rf.pitchProb, rf.gate);
 
     ++m_rankNext;
     while (m_rankNext > fillFrames) {
@@ -324,6 +324,7 @@ VoiceFollower::feedRankFrame()
 
 void
 VoiceFollower::feedSecondPath(const vector<pair<double, double> > &pitchProb,
+                              const vector<pair<double, double> > &own,
                               double gate)
 {
     // the floor bridges gaps in loud singing, not into a tail, as on the
@@ -337,7 +338,11 @@ VoiceFollower::feedSecondPath(const vector<pair<double, double> > &pitchProb,
     }
     ++m_fed;
     m_second.push_back(0.f);
-    m_pending.push_back(pitchProb);
+    // The path's pitch is looked up among the frame's own candidates:
+    // those filled in from the frames around are the voice where it was
+    // then, tens of cents away in a vibrato. With none of its own near
+    // it, the frame keeps the path's own pitch (MonoPitchHMM::nearestFreq())
+    m_pending.push_back(own);
     int lag = m_hmm.m_fixedLag;
     if (lag > 0 && int(m_pending.size()) == lag + 1) {
         // as on the first path, the first frame has no estimate

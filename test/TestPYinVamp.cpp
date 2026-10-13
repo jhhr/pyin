@@ -302,6 +302,52 @@ BOOST_AUTO_TEST_CASE(echoTailIsNotVoiced)
     BOOST_CHECK_EQUAL(count(track, 0.9, 1.35, { 220 }).voiced, 0);
 }
 
+BOOST_AUTO_TEST_CASE(echoAfterARestIsNotVoiced)
+{
+    // The same after twelve seconds of silence, all but the note itself
+    // of the level floor's window: the silence is not singing, and does
+    // not lower the level the echo is measured against
+    vector<float> audio(size_t(12 * rate), 0.f);
+    vector<float> note = tone(220, 0.3, 0.5);
+    vector<float> echo = tone(220, 0.03, 0.6);
+    audio.insert(audio.end(), note.begin(), note.end());
+    audio.insert(audio.end(), echo.begin(), echo.end());
+    vector<pair<double, double> > track = pitchTrack(audio, robust());
+    Count sung = count(track, 12.1, 12.45, { 220 });
+    BOOST_CHECK_GE(sung.voiced, int(0.35 * rate / 256) * 9 / 10);
+    BOOST_CHECK_EQUAL(count(track, 12.6, 13.05, { 220 }).voiced, 0);
+}
+
+BOOST_AUTO_TEST_CASE(lowBleedBetweenPhrasesIsNotVoiced)
+{
+    // Four phrases with a rumble at 30 Hz, or a kick drum's thumps at
+    // 48 Hz, in the second between them: the window's sidelobes of
+    // either were a low voice's partials, and the harmonicity floor
+    // voiced them at 80 to 100 Hz
+    for (int kind = 0; kind < 2; ++kind) {
+        vector<float> audio;
+        vector<float> phrase = tone(220, 0.3, 1.0);
+        for (int p = 0; p < 4; ++p) {
+            audio.insert(audio.end(), phrase.begin(), phrase.end());
+            for (int i = 0; i < rate; ++i) {
+                double t = double(i) / rate;
+                double tk = std::fmod(t, 0.5);
+                audio.push_back(kind == 0 ?
+                                float(0.1 * std::sin(2 * pi * 30 * t)) :
+                                float(0.3 * std::exp(-tk * 8) * std::sin(2 * pi * 48 * tk)));
+            }
+        }
+        vector<pair<double, double> > track = pitchTrack(audio, robust());
+        BOOST_TEST_CONTEXT((kind == 0 ? "rumble" : "kick")) {
+            for (int p = 0; p < 4; ++p) {
+                Count sung = count(track, 2 * p + 0.1, 2 * p + 0.9, { 220 });
+                BOOST_CHECK_GE(sung.voiced, int(0.8 * rate / 256) * 9 / 10);
+                BOOST_CHECK_EQUAL(count(track, 2 * p + 1.2, 2 * p + 1.9, { 220 }).voiced, 0);
+            }
+        }
+    }
+}
+
 // A harmonic tone of f0 at one level for the first half and another
 // for the second
 static vector<float> toneInTwoHalves(double f0, double seconds,

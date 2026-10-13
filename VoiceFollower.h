@@ -95,8 +95,10 @@ public:
      * The next frame, given before the first path gets it: its
      * candidates (MIDI pitch, probability) as the first path gets them,
      * each one's likelihood of being a voice by preferenceRule(), the
-     * frame's voices for the gate, and the level gate's factor (1 with
-     * none), which scales the voiced floor as on the first path.
+     * frame's voices for the gate, and the factor the first path's voiced
+     * floor is scaled by (the level gate's, 1 with none), which scales the
+     * floor here as well and counts against the frame's voices in the
+     * preference.
      */
     void addFrame(const std::vector<std::pair<double, double> > &pitchProb,
                   const std::vector<double> &likelihoods,
@@ -128,7 +130,10 @@ private:
     };
 
     void feedRankFrame();
+    // pitchProb, the frame's candidates as the second path weighs them
+    // (filled in from the frames around); own, its candidates as they came
     void feedSecondPath(const std::vector<std::pair<double, double> > &pitchProb,
+                        const std::vector<std::pair<double, double> > &own,
                         double gate);
     bool twoVoices(int frame) const;
     float secondPitch(int frame, int n) const;

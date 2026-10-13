@@ -149,6 +149,27 @@ BOOST_AUTO_TEST_CASE(lowerAndHigherInsideAPassage)
     }
 }
 
+BOOST_AUTO_TEST_CASE(pitchIsTheFramesOwnCandidate)
+{
+    // Inside a passage, one frame finds the lower voice 40 cents sharp,
+    // as a vibrato or a measurement's error can, the frames around it on
+    // 220 Hz. The second path stays on 220 Hz, which the fill-in gives
+    // that frame as well; the frame's entry is still what the frame
+    // itself found, not its neighbours' pitch
+    const double sharpHz = lowerHz * std::pow(2.0, 40 / 1200.0);
+    vector<Frame> frames(1200);
+    fill(frames, 0, 1200, both, upperHz);
+    frames[600].voices = { { sharpHz, 0.3 }, { upperHz, 0.6 } };
+    vector<float> f = byFrame(run(VoiceFollower::Lower, frames), 1200);
+    BOOST_CHECK_LT(std::fabs(cents(f[600], sharpHz)), 1);
+    for (int k = 200; k < 1000; ++k) {
+        if (k == 600) continue;
+        BOOST_TEST_CONTEXT("frame " << k) {
+            BOOST_CHECK_LT(std::fabs(cents(f[k], lowerHz)), 1);
+        }
+    }
+}
+
 BOOST_AUTO_TEST_CASE(voicingIsTheFirstPaths)
 {
     // The first path unvoiced for a moment inside the passage, and the

@@ -36,7 +36,10 @@
  * where P is the peaks' compressed magnitude (a^beta) spread over a
  * cos^2 tolerance window. The negative lobes between the harmonics
  * (as in SWIPE) count against an octave-up trial f0, whose (h - 1/2)
- * multiples are the true f0's odd harmonics.
+ * multiples are the true f0's odd harmonics. A peak is a local maximum
+ * of the spectrum that stands out from the window's leakage of every
+ * stronger one near it, even one below the range: the sidelobes of a
+ * kick drum, a rumble or DC would otherwise be a low voice's partials.
  *
  * The host's blocks overlap, so the class keeps the stream of
  * samples and takes a window centred on each frame's time (a given
@@ -68,7 +71,7 @@ public:
         double minF0 = 60;
         double maxF0 = 1600;
         int maxCandidates = 5;
-        int refineHarmonics = 5;  // harmonics fitted to refine a candidate's frequency
+        int refineHarmonics = 5;  // harmonics whose estimates refine a candidate's frequency
     };
 
     struct Peak {
@@ -212,9 +215,10 @@ public:
                                          const VoiceRule &rule) const;
 
     /**
-     * Refines a candidate f0 by the least-squares fit of h f0 to the
-     * frequencies of the spectral peaks within the tolerance of its
-     * first nHarm harmonics. Returns f0 unchanged if none is found.
+     * Refines a candidate f0 by the median of the estimates its first
+     * nHarm harmonics give: the frequency of the strongest spectral peak
+     * within the tolerance of h f0, over h. Returns f0 unchanged if no
+     * harmonic has a peak.
      */
     double refine(double f0, int nHarm) const;
 
@@ -242,6 +246,7 @@ private:
     std::vector<double> m_sal;
     double m_maxSalience;
     double m_peakSum;
+    double m_maxPeakGain;  // the most a peak can be above its highest bin
     std::vector<Peak> m_peaks;
 
     void append(const float *x, int n);

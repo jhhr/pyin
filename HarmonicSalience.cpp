@@ -22,6 +22,13 @@ using std::pair;
 static const int binsPerOctave = 120; // 10 cents
 static const double pi = 3.14159265358979323846;
 
+// How far above a stronger peak's leakage a peak has to stand to be a
+// partial of its own (6 dB), and how many of the window's resolutions
+// away leakage is looked for: at 16 it is 82 dB down
+static const double leakMargin = 2.0;
+static const double leakReach = 16.0;
+
+
 static double centsBetween(double a, double b)
 {
     return 1200.0 * std::log(a / b) / std::log(2.0);
@@ -57,6 +64,13 @@ HarmonicSalience::HarmonicSalience(float sampleRate, int blockSize, int stepSize
     }
     // so that a sinusoid of amplitude a peaks at about a
     for (int i = 0; i < n; ++i) m_window[i] *= 2.0 / wsum;
+
+    // A maximum is at most half a bin of the FFT from a bin, where the
+    // window's main lobe is this far below it: 1% with the zero padding
+    // to four times the window
+    double x = 0.5 * double(n) / m_p.fftSize; // in the window's resolutions
+    double lobe = sin(pi * x) / (pi * x) / (1 - x * x);
+    m_maxPeakGain = 1.0 / lobe;
 
     m_fftIn.resize(m_p.fftSize, 0.0);
     m_fftOut.resize(m_p.fftSize + 2, 0.0);
@@ -172,15 +186,21 @@ HarmonicSalience::findPeaks()
 {
     m_peaks.clear();
     double binHz = m_sampleRate / m_p.fftSize;
-    int lo = std::max(1, int(ceil(m_p.minPeakHz / binHz)));
     int hi = std::min(m_p.fftSize / 2 - 1, int(floor(m_p.maxPeakHz / binHz)));
-    double top = 0;
-    for (int b = lo; b <= hi; ++b) top = std::max(top, m_mag[b]);
-    if (top < 1e-7) return; // digital silence or nearly
-    double thr = top * pow(10.0, m_p.peakFloorDb / 20.0);
-    for (int b = lo; b <= hi; ++b) {
+
+    // Every local maximum up to the highest frequency, and below the
+    // lowest as well: what leaks into the peaks' range comes from there
+    // too. DC is one, at bin 0
+    vector<Peak> all;
+    if (m_mag[0] > m_mag[1]) {
+        Peak p;
+        p.freq = 0;
+        p.amp = m_mag[0];
+        all.push_back(p);
+    }
+    for (int b = 1; b <= hi; ++b) {
         double m1 = m_mag[b];
-        if (m1 <= thr || !(m1 > m_mag[b-1] && m1 >= m_mag[b+1])) continue;
+        if (m1 < 1e-9 || !(m1 > m_mag[b-1] && m1 >= m_mag[b+1])) continue;
         // a parabola through the log magnitudes places the peak
         double a0 = log(m_mag[b-1] + 1e-12), a1 = log(m1), a2 = log(m_mag[b+1] + 1e-12);
         double den = a0 - 2 * a1 + a2;
@@ -188,8 +208,53 @@ HarmonicSalience::findPeaks()
         d = std::max(-0.5, std::min(0.5, d));
         Peak p;
         p.freq = (b + d) * binHz;
-        p.amp = exp(a1 - 0.25 * (a0 - a2) * d);
-        m_peaks.push_back(p);
+        // No more than a maximum can be above its nearest bin (see the
+        // constructor). Next to a null of the window's sidelobes the log
+        // parabola is no fit at all, and would make a sidelobe many times
+        // stronger than it is
+        p.amp = std::min(exp(a1 - 0.25 * (a0 - a2) * d), m1 * m_maxPeakGain);
+        all.push_back(p);
+    }
+
+    // A peak is a partial only if it stands out from the window's
+    // leakage of every stronger peak near it. The Hann window's
+    // sidelobes are maxima of their own, the first 31.5 dB down at 2.5
+    // times the window's resolution: those of a kick drum or a rumble
+    // below the range land in its lowest octave, whose harmonics they
+    // then seem to be, and those of DC from 50 Hz up. The sidelobes fall
+    // to 1 / (pi d (d^2 - 1)) of the peak d resolutions away; a partial
+    // has to stand leakMargin above that
+    const double resolutionHz = m_sampleRate / m_p.windowSize;
+    const double reachHz = leakReach * resolutionHz;
+    vector<Peak> own;
+    size_t from = 0;
+    for (size_t i = 0; i < all.size(); ++i) {
+        const Peak &p = all[i];
+        if (p.freq < m_p.minPeakHz) continue;
+        while (all[from].freq < p.freq - reachHz) ++from;
+        bool leaked = false;
+        for (size_t j = from; j < all.size() && all[j].freq <= p.freq + reachHz; ++j) {
+            const Peak &q = all[j];
+            if (q.amp <= p.amp) continue;
+            double d = fabs(p.freq - q.freq) / resolutionHz;
+            double sidelobe = d <= 1.0 ? 1.0 : 1.0 / (pi * d * (d * d - 1));
+            if (p.amp < leakMargin * sidelobe * q.amp) {
+                leaked = true;
+                break;
+            }
+        }
+        if (!leaked) own.push_back(p);
+    }
+
+    // The floor is below the strongest maximum of all, whatever it is:
+    // below a louder sound out of the range, a peak is that sound's
+    // leakage further away than leakReach looks, or noise
+    double top = 0;
+    for (const Peak &p : all) top = std::max(top, p.amp);
+    if (top < 1e-7) return; // digital silence or nearly
+    double thr = top * pow(10.0, m_p.peakFloorDb / 20.0);
+    for (const Peak &p : own) {
+        if (p.amp > thr) m_peaks.push_back(p);
     }
 }
 
@@ -457,7 +522,13 @@ HarmonicSalience::refine(double f0, int nHarm) const
 {
     if (m_peaks.empty() || f0 <= 0) return f0;
     double tolRatio = pow(2.0, m_p.tolBins / binsPerOctave);
-    double num = 0, den = 0;
+    // Each harmonic's own estimate, and their median rather than a fit
+    // of them all: where another voice's partial falls within one of the
+    // tolerances (a tempered third's lower voice has its fifth harmonic
+    // 14 cents from the upper voice's fourth), it is that harmonic's
+    // estimate that is out, and a fit weighted by amplitude and harmonic
+    // number goes most of the way to it
+    vector<double> estimates;
     for (int h = 1; h <= nHarm; ++h) {
         double target = h * f0;
         double lo = target / tolRatio, hi = target * tolRatio;
@@ -469,12 +540,13 @@ HarmonicSalience::refine(double f0, int nHarm) const
             if (it->amp > bestAmp) { bestAmp = it->amp; bestFreq = it->freq; }
         }
         if (bestAmp <= 0) continue;
-        double w = bestAmp * bestAmp;
-        num += w * h * bestFreq;
-        den += w * h * h;
+        estimates.push_back(bestFreq / h);
     }
-    if (den <= 0) return f0;
-    double f = num / den;
+    if (estimates.empty()) return f0;
+    std::sort(estimates.begin(), estimates.end());
+    size_t n = estimates.size();
+    double f = n % 2 ? estimates[n / 2] :
+        0.5 * (estimates[n / 2 - 1] + estimates[n / 2]);
     // a fit that moves the candidate further than its tolerance has
     // found another voice's partials
     if (fabs(1200 * log2(f / f0)) > 10 * m_p.tolBins) return f0;
